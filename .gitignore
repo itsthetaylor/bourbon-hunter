@@ -1,0 +1,28 @@
+# Virtual environment
+venv/
+
+# Environment variables (NEVER commit these)
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+
+# Photo intake folders (don't commit your bottle photos)
+data/photos_to_process/
+data/photos_processed/
+data/photos_failed/
+
+# Debug HTML dumps from scraper testing
+*_dump.html
+
+# Test scripts (kept locally, not part of project)
+test_api.py
+test_scraper.py
+
+# OS junk
+.DS_Store
+Thumbs.db

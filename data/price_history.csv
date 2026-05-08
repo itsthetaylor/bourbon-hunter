@@ -1,0 +1,10 @@
+timestamp,bottle_id,name,wooden_cork_price,bbb_price,market_value,sources_count,msrp,acquisition_price,gain_loss_dollar,gain_loss_pct
+2026-05-08T00:15:38,pappy_12_lot_b,Pappy Van Winkle 12 Lot B,899.99,550.00,725.00,2,79.99,98.00,627.00,639.79
+2026-05-08T00:26:48,pappy_12_lot_b,Pappy Van Winkle 12 Lot B,899.99,550.00,725.00,2,79.99,98.00,627.00,639.79
+2026-05-08T00:26:48,weller_single_barrel,Weller Single Barrel,399.99,,399.99,1,49.99,,,
+2026-05-08T00:28:25,pappy_12_lot_b,Pappy Van Winkle 12 Lot B,899.99,550.00,725.00,2,79.99,98.00,627.00,639.79
+2026-05-08T00:28:25,weller_single_barrel,Weller Single Barrel,399.99,340.00,370.00,2,49.99,200.00,170.00,85.00
+2026-05-08T00:36:10,pappy_12_lot_b,Pappy Van Winkle 12 Lot B,899.99,550.00,725.00,2,79.99,98.00,627.00,639.79
+2026-05-08T00:36:10,weller_single_barrel,Weller Single Barrel,399.99,340.00,370.00,2,49.99,200.00,170.00,85.00
+2026-05-08T00:44:02,pappy_12_lot_b,Pappy Van Winkle 12 Lot B,899.99,550.00,725.00,2,79.99,98.00,627.00,639.79
+2026-05-08T00:44:02,weller_single_barrel,Weller Single Barrel,399.99,340.00,370.00,2,49.99,200.00,170.00,85.00
