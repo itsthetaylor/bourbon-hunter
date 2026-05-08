@@ -26,3 +26,6 @@ test_scraper.py
 # OS junk
 .DS_Store
 Thumbs.db
+# Google API credentials (never commit)
+google_credentials.json
+token.json
