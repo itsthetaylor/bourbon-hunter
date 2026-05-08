@@ -1,4 +1,4 @@
-bottle_id,name,proof,msrp,acquisition_date,acquisition_price,wooden_cork_url,bbb_url
-pappy_12_lot_b,Pappy Van Winkle 12 Lot B,90.4,79.99,2024-12-01,98.00,https://woodencork.com/products/van-winkle-special-reserve-12-years-old,https://bottlebluebook.com/group/20/Van+Winkle+12+Year+Lot+B
-eht_bp_rye,EH Taylor Barrel Proof Rye,,69.99,,,,
-weller_single_barrel,Weller Single Barrel,97,49.99,,200.00,https://woodencork.com/products/w-l-weller-single-barrel,https://bottlebluebook.com/group/40/Weller
+bottle_id,name,proof,msrp,acquisition_date,acquisition_price,wooden_cork_url,bbb_url,barrel_tap_url,keg_n_bottle_url
+pappy_12_lot_b,Pappy Van Winkle 12 Lot B,90.4,79.99,2024-12-01,98.00,https://woodencork.com/products/van-winkle-special-reserve-12-years-old,https://bottlebluebook.com/group/20/Van+Winkle+12+Year+Lot+B,,
+eht_bp_rye,EH Taylor Barrel Proof Rye,126,69.99,,90.00,,,https://www.thebarreltap.com/products/colonel-e-h-taylor-jr-barrel-proof-rye-whiskey,https://kegnbottle.com/products/e-h-taylor-barrel-proof-126-proof-rye-whiskey-750ml
+weller_single_barrel,Weller Single Barrel,97,49.99,,200.00,https://woodencork.com/products/w-l-weller-single-barrel,https://bottlebluebook.com/group/40/Weller,,

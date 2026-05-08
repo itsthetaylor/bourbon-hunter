@@ -15,6 +15,7 @@ HISTORY_CSV = Path("data/price_history.csv")
 HISTORY_FIELDNAMES = [
     "timestamp", "bottle_id", "name",
     "wooden_cork_price", "bbb_price",
+    "barrel_tap_price", "keg_n_bottle_price",
     "market_value", "sources_count",
     "msrp", "acquisition_price",
     "gain_loss_dollar", "gain_loss_pct"
@@ -63,8 +64,41 @@ def get_price_bbb(url, target_proof=None):
     return None
 
 
+def get_price_barrel_tap(url):
+    if not url:
+        return None
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        return None
+    soup = BeautifulSoup(response.text, "html.parser")
+    price_span = soup.find("span", class_="product__price")
+    if not price_span:
+        return None
+    matches = re.findall(r"\$[\d,]+\.\d{2}", price_span.get_text())
+    if not matches:
+        return None
+    return float(matches[0].replace("$", "").replace(",", ""))
+
+
+def get_price_keg_n_bottle(url):
+    if not url:
+        return None
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        return None
+    soup = BeautifulSoup(response.text, "html.parser")
+    price_span = soup.find("span", class_="price--highlight")
+    if not price_span:
+        return None
+    matches = re.findall(r"\$[\d,]+\.\d{2}", price_span.get_text())
+    if not matches:
+        return None
+    return float(matches[0].replace("$", "").replace(",", ""))
+
+
 def append_history_row(row):
     file_exists = HISTORY_CSV.exists()
+    # Migration: if existing file doesn't have new columns, this will fail silently on read
     with open(HISTORY_CSV, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES)
         if not file_exists:
@@ -79,21 +113,23 @@ def process_bottle(bottle, timestamp):
     print(f"\n{name}")
     print("=" * 60)
 
-    wc_price = get_price_wooden_cork(bottle.get("wooden_cork_url"))
-    bbb_price = get_price_bbb(bottle.get("bbb_url"), target_proof=proof)
+    # Source -> (price, label)
+    sources = [
+        ("Wooden Cork (retail)", get_price_wooden_cork(bottle.get("wooden_cork_url"))),
+        ("Bottle Blue Book (auction)", get_price_bbb(bottle.get("bbb_url"), target_proof=proof)),
+        ("The Barrel Tap (retail)", get_price_barrel_tap(bottle.get("barrel_tap_url"))),
+        ("Keg N Bottle (retail)", get_price_keg_n_bottle(bottle.get("keg_n_bottle_url"))),
+    ]
+
+    url_keys = ["wooden_cork_url", "bbb_url", "barrel_tap_url", "keg_n_bottle_url"]
 
     prices = []
-    if wc_price:
-        print(f"  Wooden Cork (retail):       ${wc_price:,.2f}")
-        prices.append(wc_price)
-    elif bottle.get("wooden_cork_url"):
-        print(f"  Wooden Cork (retail):       FAILED")
-
-    if bbb_price:
-        print(f"  Bottle Blue Book (auction): ${bbb_price:,.2f}")
-        prices.append(bbb_price)
-    elif bottle.get("bbb_url"):
-        print(f"  Bottle Blue Book (auction): FAILED")
+    for (label, price), url_key in zip(sources, url_keys):
+        if price:
+            print(f"  {label:30} ${price:,.2f}")
+            prices.append(price)
+        elif bottle.get(url_key):
+            print(f"  {label:30} FAILED")
 
     if not prices:
         print("  No prices available")
@@ -101,15 +137,15 @@ def process_bottle(bottle, timestamp):
 
     market_value = sum(prices) / len(prices)
     print("-" * 60)
-    print(f"  Market Value:               ${market_value:,.2f}  (avg of {len(prices)})")
+    print(f"  Market Value:                  ${market_value:,.2f}  (avg of {len(prices)})")
 
     msrp = float(bottle["msrp"]) if bottle.get("msrp") else None
     paid = float(bottle["acquisition_price"]) if bottle.get("acquisition_price") else None
 
     if msrp:
-        print(f"  MSRP:                       ${msrp:,.2f}")
+        print(f"  MSRP:                          ${msrp:,.2f}")
     if paid:
-        print(f"  You Paid:                   ${paid:,.2f}")
+        print(f"  You Paid:                      ${paid:,.2f}")
 
     delta_dollar = None
     delta_pct = None
@@ -117,15 +153,22 @@ def process_bottle(bottle, timestamp):
         delta_dollar = market_value - paid
         delta_pct = (delta_dollar / paid) * 100
         sign = "+" if delta_dollar >= 0 else ""
-        print(f"  Gain/Loss vs. Paid:         {sign}${delta_dollar:,.2f}  ({sign}{delta_pct:.1f}%)")
+        print(f"  Gain/Loss vs. Paid:            {sign}${delta_dollar:,.2f}  ({sign}{delta_pct:.1f}%)")
 
-    # Log to history
+    # Pull individual prices for history log
+    wc_price = sources[0][1]
+    bbb_price = sources[1][1]
+    bt_price = sources[2][1]
+    kb_price = sources[3][1]
+
     append_history_row({
         "timestamp": timestamp,
         "bottle_id": bottle["bottle_id"],
         "name": name,
         "wooden_cork_price": f"{wc_price:.2f}" if wc_price else "",
         "bbb_price": f"{bbb_price:.2f}" if bbb_price else "",
+        "barrel_tap_price": f"{bt_price:.2f}" if bt_price else "",
+        "keg_n_bottle_price": f"{kb_price:.2f}" if kb_price else "",
         "market_value": f"{market_value:.2f}",
         "sources_count": len(prices),
         "msrp": f"{msrp:.2f}" if msrp else "",
