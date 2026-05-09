@@ -33,7 +33,8 @@ FAILED_FOLDER_NAME = "photos_failed"
 BOTTLES_CSV = Path("data/bottles.csv")
 
 FIELDNAMES = ["bottle_id", "name", "proof", "msrp", "acquisition_date",
-              "acquisition_price", "wooden_cork_url", "bbb_url",
+              "acquisition_price", "batch", "bottle_code",
+              "wooden_cork_url", "bbb_url",
               "barrel_tap_url", "keg_n_bottle_url"]
 
 CLAUDE_SUPPORTED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -145,16 +146,29 @@ def identify_bottle(image_bytes, mime_type):
 
     prompt = """You are identifying a bourbon/whiskey bottle from a photo.
 
+IMPORTANT: Different batches of the same product (e.g., two EH Taylor Barrel
+Proof bottles at 127.4 vs 127.3 proof) are DIFFERENT bottles. Capture every
+distinguishing detail you can see so they can be told apart later.
+
+Look carefully at:
+- The front label (product name, distillery, age statement, MSRP)
+- The neck label / back label
+- Hand-written or stamped text anywhere on the label
+- The BOTTOM of the bottle and the BACK of the bottle if visible
+  (batch numbers, bottle codes, dump dates, and exact proofs are often there)
+
 Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
 
 {
   "name": "Full bottle name as commonly referenced",
   "distillery": "Distillery or brand",
-  "proof": "Proof as a number, or null if not visible",
-  "year": "Release year if visible, or null",
+  "proof": "Exact proof to one decimal place if visible (e.g. \\"127.4\\", not \\"127\\"). Null if not visible.",
+  "batch": "Batch identifier if visible (e.g. \\"Batch 11\\", \\"B11\\", \\"Batch C923\\", or any hand-written batch text). Null if not visible.",
+  "year": "Release year or vintage if visible, or null",
+  "bottle_code": "Any other distinguishing identifier on the bottle — bottling/dump date, lot code, barrel number, hand-written annotation, stamped code, etc. Null if none visible.",
   "msrp": "MSRP in USD as a number, or null if unknown",
   "confidence": "high, medium, or low",
-  "notes": "Any uncertainty or details to flag for the user"
+  "notes": "Any uncertainty or details to flag for the user, including anything you saw but couldn't fully read"
 }
 
 If you cannot identify the bottle at all, return:
@@ -211,6 +225,8 @@ def add_bottle(bottle_data):
     bottle_id = slugify(bottle_data["name"])
     proof = bottle_data.get("proof") or ""
     msrp = bottle_data.get("msrp") or ""
+    batch = bottle_data.get("batch") or ""
+    bottle_code = bottle_data.get("bottle_code") or ""
 
     new_row = {
         "bottle_id": bottle_id,
@@ -219,6 +235,8 @@ def add_bottle(bottle_data):
         "msrp": str(msrp) if msrp else "",
         "acquisition_date": "",
         "acquisition_price": "",
+        "batch": str(batch) if batch else "",
+        "bottle_code": str(bottle_code) if bottle_code else "",
         "wooden_cork_url": "",
         "bbb_url": "",
         "barrel_tap_url": "",
@@ -280,7 +298,9 @@ def main():
         print(f"  Name:       {result.get('name')}")
         print(f"  Distillery: {result.get('distillery')}")
         print(f"  Proof:      {result.get('proof')}")
+        print(f"  Batch:      {result.get('batch')}")
         print(f"  Year:       {result.get('year')}")
+        print(f"  Code:       {result.get('bottle_code')}")
         print(f"  MSRP:       {result.get('msrp')}")
         print(f"  Confidence: {result.get('confidence')}")
         if result.get("notes"):
