@@ -16,7 +16,8 @@ PHOTOS_FAILED = Path("data/photos_failed")
 BOTTLES_CSV = Path("data/bottles.csv")
 
 FIELDNAMES = ["bottle_id", "name", "proof", "msrp", "acquisition_date",
-              "acquisition_price", "wooden_cork_url", "bbb_url"]
+              "acquisition_price", "wooden_cork_url", "bbb_url",
+              "barrel_tap_url", "keg_n_bottle_url"]
 
 client = Anthropic()
 
@@ -119,6 +120,8 @@ def add_bottle(bottle_data):
         "acquisition_price": "",
         "wooden_cork_url": "",
         "bbb_url": "",
+        "barrel_tap_url": "",
+        "keg_n_bottle_url": "",
     }
 
     bottles = load_bottles()
