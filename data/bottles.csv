@@ -1,8 +1,11 @@
-bottle_id,name,proof,msrp,acquisition_date,acquisition_price,wooden_cork_url,bbb_url
-colonel_eh_taylor_jr_barrel_proof,"Colonel E.H. Taylor, Jr. Barrel Proof",,70,,,,
-colonel_eh_taylor_barrel_proof,Colonel E.H. Taylor Barrel Proof,,70,,,,
-colonel_eh_taylor_jr_straight_rye_whiskey,"Colonel E.H. Taylor, Jr. Straight Rye Whiskey",100,80,,,,
-blantons_single_barrel_bourbon,Blanton's Single Barrel Bourbon,80,65,,,,
-old_fitzgerald_bottled_in_bond_9_year,Old Fitzgerald Bottled-in-Bond 9 Year,100,150,,,,
-stagg_jr_barrel_proof_bourbon,Stagg Jr. Barrel Proof Bourbon,132.5,60,,,,
-evan_williams_single_barrel_vintage_bourbon_bourbon_nation_collegiate_edition,Evan Williams Single Barrel Vintage Bourbon - Bourbon Nation Collegiate Edition,86.6,,,,,
+bottle_id,name,proof,msrp,acquisition_date,acquisition_price,wooden_cork_url,bbb_url,barrel_tap_url,keg_n_bottle_url
+colonel_eh_taylor_jr_barrel_proof,"Colonel E.H. Taylor, Jr. Barrel Proof",,70,,,,,,
+colonel_eh_taylor_barrel_proof,Colonel E.H. Taylor Barrel Proof,,70,,,,,,
+colonel_eh_taylor_jr_straight_rye_whiskey,"Colonel E.H. Taylor, Jr. Straight Rye Whiskey",100,80,,,,,,
+blantons_single_barrel_bourbon,Blanton's Single Barrel Bourbon,80,65,,,,,,
+old_fitzgerald_bottled_in_bond_9_year,Old Fitzgerald Bottled-in-Bond 9 Year,100,150,,,,,,
+stagg_jr_barrel_proof_bourbon,Stagg Jr. Barrel Proof Bourbon,132.5,60,,,,,,
+evan_williams_single_barrel_vintage_bourbon_bourbon_nation_collegiate_edition,Evan Williams Single Barrel Vintage Bourbon - Bourbon Nation Collegiate Edition,86.6,,,,,,,
+pappy_12_lot_b,Pappy Van Winkle 12 Lot B,90.4,79.99,2024-12-01,98.00,https://woodencork.com/products/van-winkle-special-reserve-12-years-old,https://bottlebluebook.com/group/20/Van+Winkle+12+Year+Lot+B,,
+eht_bp_rye,EH Taylor Barrel Proof Rye,126,69.99,,90.00,,,https://www.thebarreltap.com/products/colonel-e-h-taylor-jr-barrel-proof-rye-whiskey,https://kegnbottle.com/products/e-h-taylor-barrel-proof-126-proof-rye-whiskey-750ml
+weller_single_barrel,Weller Single Barrel,97,49.99,,200.00,https://woodencork.com/products/w-l-weller-single-barrel,https://bottlebluebook.com/group/40/Weller,,
