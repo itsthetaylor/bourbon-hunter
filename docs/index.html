@@ -112,7 +112,18 @@ h1 {
 .negative { color: #e88686; }
 .neutral { color: #a08770; font-style: italic; }
 
+.section-header {
+    font-family: Georgia, serif;
+    font-size: 16px;
+    color: #d4a574;
+    letter-spacing: 1px;
+    margin: 28px 0 12px 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(212, 165, 116, 0.18);
+}
+
 .card {
+    position: relative;
     background: linear-gradient(135deg, rgba(30, 18, 10, 0.9), rgba(45, 26, 14, 0.85));
     border: 1px solid rgba(212, 165, 116, 0.18);
     border-radius: 12px;
@@ -126,6 +137,48 @@ h1 {
 .card:hover {
     transform: translateY(-2px);
     border-color: rgba(212, 165, 116, 0.4);
+}
+
+.card.archived {
+    opacity: 0.78;
+    background: linear-gradient(135deg, rgba(22, 14, 8, 0.85), rgba(32, 20, 12, 0.8));
+    border-color: rgba(160, 135, 112, 0.18);
+}
+
+.card.archived .card-name,
+.card.archived .card-value {
+    color: #c9b896;
+}
+
+.archive-badge {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: #a08770;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(160, 135, 112, 0.35);
+    padding: 3px 8px;
+    border-radius: 4px;
+}
+
+.archive-notes {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(160, 135, 112, 0.18);
+    font-size: 12px;
+    color: #a08770;
+    font-style: italic;
+}
+
+.empty-archive {
+    color: #6b5544;
+    font-style: italic;
+    font-size: 13px;
+    text-align: center;
+    padding: 20px 0;
 }
 
 .card-name {
@@ -213,6 +266,7 @@ footer {
         </div>
     </div>
 
+    <div class="section-header">Active Collection — 18 bottles, $3,857 current value</div>
     <div class="bottles">
         
         <div class="card">
@@ -469,8 +523,13 @@ footer {
         
     </div>
 
+    <div class="section-header">Archive — 0 bottles, +$0 realized gain</div>
+    <div class="bottles">
+        <div class="empty-archive">No archived bottles yet.</div>
+    </div>
+
     <footer>
-        Last updated · 2026-05-18T20:00:05
+        Last updated · 2026-05-20T22:23:07
     </footer>
 </div>
 </body>
