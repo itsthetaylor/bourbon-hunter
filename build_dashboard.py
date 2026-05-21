@@ -19,6 +19,52 @@ def load_csv(path):
         return list(csv.DictReader(f))
 
 
+def build_active_card(bottle, snapshot):
+    market_value = float(snapshot["market_value"]) if snapshot and snapshot.get("market_value") else None
+    paid = float(bottle["acquisition_price"]) if bottle.get("acquisition_price") else None
+    msrp = float(bottle["msrp"]) if bottle.get("msrp") else None
+
+    gain_dollar = None
+    gain_pct = None
+    if paid and market_value:
+        gain_dollar = market_value - paid
+        gain_pct = (gain_dollar / paid) * 100
+
+    return {
+        "name": bottle["name"],
+        "proof": bottle.get("proof", ""),
+        "batch": bottle.get("batch", ""),
+        "bottle_code": bottle.get("bottle_code", ""),
+        "market_value": market_value,
+        "msrp": msrp,
+        "paid": paid,
+        "gain_dollar": gain_dollar,
+        "gain_pct": gain_pct,
+        "sources_count": int(snapshot["sources_count"]) if snapshot and snapshot.get("sources_count") else 0,
+        "last_updated": snapshot["timestamp"] if snapshot else None,
+    }
+
+
+def build_archive_card(bottle):
+    paid = float(bottle["acquisition_price"]) if bottle.get("acquisition_price") else None
+    sale_price = float(bottle["sale_price"]) if bottle.get("sale_price") else None
+    status = bottle.get("status") or ""
+
+    realized_gain = None
+    if status == "sold" and paid is not None and sale_price is not None:
+        realized_gain = sale_price - paid
+
+    return {
+        "name": bottle["name"],
+        "status": status,
+        "removed_date": bottle.get("removed_date", ""),
+        "paid": paid,
+        "sale_price": sale_price,
+        "realized_gain": realized_gain,
+        "removal_notes": bottle.get("removal_notes", ""),
+    }
+
+
 def build_dashboard():
     OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -31,89 +77,76 @@ def build_dashboard():
         if bid not in latest_by_bottle or row["timestamp"] > latest_by_bottle[bid]["timestamp"]:
             latest_by_bottle[bid] = row
 
-    cards = []
+    active_cards = []
+    archive_cards = []
     total_paid = 0.0
     total_value = 0.0
+    archive_realized_gain = 0.0
 
     for bottle in bottles:
-        bid = bottle["bottle_id"]
-        snapshot = latest_by_bottle.get(bid)
-
-        market_value = float(snapshot["market_value"]) if snapshot and snapshot.get("market_value") else None
-        paid = float(bottle["acquisition_price"]) if bottle.get("acquisition_price") else None
-        msrp = float(bottle["msrp"]) if bottle.get("msrp") else None
-
-        gain_dollar = None
-        gain_pct = None
-        if paid and market_value:
-            gain_dollar = market_value - paid
-            gain_pct = (gain_dollar / paid) * 100
-
-        if paid and market_value:
-            total_paid += paid
-            total_value += market_value
-
-        cards.append({
-            "name": bottle["name"],
-            "proof": bottle.get("proof", ""),
-            "batch": bottle.get("batch", ""),
-            "bottle_code": bottle.get("bottle_code", ""),
-            "market_value": market_value,
-            "msrp": msrp,
-            "paid": paid,
-            "gain_dollar": gain_dollar,
-            "gain_pct": gain_pct,
-            "sources_count": int(snapshot["sources_count"]) if snapshot and snapshot.get("sources_count") else 0,
-            "last_updated": snapshot["timestamp"] if snapshot else None,
-        })
+        status = (bottle.get("status") or "active")
+        if status == "active":
+            snapshot = latest_by_bottle.get(bottle["bottle_id"])
+            card = build_active_card(bottle, snapshot)
+            if card["paid"] and card["market_value"]:
+                total_paid += card["paid"]
+                total_value += card["market_value"]
+            active_cards.append(card)
+        else:
+            card = build_archive_card(bottle)
+            if card["realized_gain"] is not None:
+                archive_realized_gain += card["realized_gain"]
+            archive_cards.append(card)
 
     total_gain = total_value - total_paid if total_paid else 0
     total_gain_pct = (total_gain / total_paid * 100) if total_paid else 0
-    last_run = max((c["last_updated"] for c in cards if c["last_updated"]), default="never")
+    last_run = max(
+        (c["last_updated"] for c in active_cards if c["last_updated"]),
+        default="never",
+    )
 
-    html = render_html(cards, total_paid, total_value, total_gain, total_gain_pct, last_run)
+    html = render_html(
+        active_cards, archive_cards,
+        total_paid, total_value, total_gain, total_gain_pct,
+        archive_realized_gain, last_run,
+    )
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(html)
 
     print(f"Dashboard generated: {OUTPUT_FILE}")
-    print(f"  {len(cards)} bottles, total value ${total_value:,.2f}")
+    print(f"  Active: {len(active_cards)} bottles, total value ${total_value:,.2f}")
+    print(f"  Archive: {len(archive_cards)} bottles, realized gain ${archive_realized_gain:,.2f}")
 
 
-def render_html(cards, total_paid, total_value, total_gain, total_gain_pct, last_run):
-    sign = "+" if total_gain >= 0 else ""
-    gain_class = "positive" if total_gain >= 0 else "negative"
-
-    cards_html = ""
-    for c in cards:
-        if c["market_value"] is None:
-            value_str = "—"
-            gain_str = "tracking soon"
-            gain_class_card = "neutral"
+def render_active_card(c):
+    if c["market_value"] is None:
+        value_str = "—"
+        gain_str = "tracking soon"
+        gain_class_card = "neutral"
+    else:
+        value_str = f"${c['market_value']:,.0f}"
+        if c["gain_dollar"] is not None:
+            s = "+" if c["gain_dollar"] >= 0 else ""
+            gain_str = f"{s}${c['gain_dollar']:,.0f} · {s}{c['gain_pct']:.0f}%"
+            gain_class_card = "positive" if c["gain_dollar"] >= 0 else "negative"
         else:
-            value_str = f"${c['market_value']:,.0f}"
-            if c["gain_dollar"] is not None:
-                s = "+" if c["gain_dollar"] >= 0 else ""
-                gain_str = f"{s}${c['gain_dollar']:,.0f} · {s}{c['gain_pct']:.0f}%"
-                gain_class_card = "positive" if c["gain_dollar"] >= 0 else "negative"
-            else:
-                gain_str = "no acquisition data"
-                gain_class_card = "neutral"
+            gain_str = "no acquisition data"
+            gain_class_card = "neutral"
 
-        paid_str = f"${c['paid']:,.0f}" if c["paid"] else "—"
-        msrp_str = f"${c['msrp']:,.0f}" if c["msrp"] else "—"
+    paid_str = f"${c['paid']:,.0f}" if c["paid"] else "—"
+    msrp_str = f"${c['msrp']:,.0f}" if c["msrp"] else "—"
 
-        # Subtitle line: proof, batch, bottle_code
-        subtitle_parts = []
-        if c["proof"]:
-            subtitle_parts.append(f"{c['proof']} proof")
-        if c["batch"]:
-            subtitle_parts.append(f"Batch {c['batch']}")
-        if c["bottle_code"]:
-            subtitle_parts.append(c["bottle_code"])
-        subtitle = " · ".join(subtitle_parts) if subtitle_parts else "—"
+    subtitle_parts = []
+    if c["proof"]:
+        subtitle_parts.append(f"{c['proof']} proof")
+    if c["batch"]:
+        subtitle_parts.append(f"Batch {c['batch']}")
+    if c["bottle_code"]:
+        subtitle_parts.append(c["bottle_code"])
+    subtitle = " · ".join(subtitle_parts) if subtitle_parts else "—"
 
-        cards_html += f"""
+    return f"""
         <div class="card">
             <div class="card-name">{c['name']}</div>
             <div class="card-subtitle">{subtitle}</div>
@@ -128,6 +161,58 @@ def render_html(cards, total_paid, total_value, total_gain, total_gain_pct, last
             </div>
         </div>
         """
+
+
+def render_archive_card(c):
+    paid_str = f"${c['paid']:,.0f}" if c["paid"] else "—"
+    sale_str = f"${c['sale_price']:,.0f}" if c["sale_price"] else "—"
+
+    if c["realized_gain"] is not None:
+        s = "+" if c["realized_gain"] >= 0 else ""
+        gain_str = f"{s}${c['realized_gain']:,.0f}"
+        gain_class_card = "positive" if c["realized_gain"] >= 0 else "negative"
+    else:
+        gain_str = "—"
+        gain_class_card = "neutral"
+
+    status_label = (c["status"] or "archived").replace("_", " ").upper()
+    removed_str = c["removed_date"] or "—"
+    notes_html = ""
+    if c["removal_notes"]:
+        notes_html = f'<div class="archive-notes">{c["removal_notes"]}</div>'
+
+    return f"""
+        <div class="card archived">
+            <div class="archive-badge">{status_label}</div>
+            <div class="card-name">{c['name']}</div>
+            <div class="card-subtitle">Removed {removed_str}</div>
+            <div class="card-value-row">
+                <div class="card-value">{sale_str}</div>
+                <div class="card-gain {gain_class_card}">{gain_str}</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>{paid_str}</strong></div>
+                <div><span>Sale</span><strong>{sale_str}</strong></div>
+                <div><span>Realized</span><strong>{gain_str}</strong></div>
+            </div>
+            {notes_html}
+        </div>
+        """
+
+
+def render_html(active_cards, archive_cards, total_paid, total_value,
+                total_gain, total_gain_pct, archive_realized_gain, last_run):
+    sign = "+" if total_gain >= 0 else ""
+    gain_class = "positive" if total_gain >= 0 else "negative"
+
+    active_html = "".join(render_active_card(c) for c in active_cards)
+
+    if archive_cards:
+        archive_inner = "".join(render_archive_card(c) for c in archive_cards)
+    else:
+        archive_inner = '<div class="empty-archive">No archived bottles yet.</div>'
+
+    arch_sign = "+" if archive_realized_gain >= 0 else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -243,7 +328,18 @@ h1 {{
 .negative {{ color: #e88686; }}
 .neutral {{ color: #a08770; font-style: italic; }}
 
+.section-header {{
+    font-family: Georgia, serif;
+    font-size: 16px;
+    color: #d4a574;
+    letter-spacing: 1px;
+    margin: 28px 0 12px 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(212, 165, 116, 0.18);
+}}
+
 .card {{
+    position: relative;
     background: linear-gradient(135deg, rgba(30, 18, 10, 0.9), rgba(45, 26, 14, 0.85));
     border: 1px solid rgba(212, 165, 116, 0.18);
     border-radius: 12px;
@@ -257,6 +353,48 @@ h1 {{
 .card:hover {{
     transform: translateY(-2px);
     border-color: rgba(212, 165, 116, 0.4);
+}}
+
+.card.archived {{
+    opacity: 0.78;
+    background: linear-gradient(135deg, rgba(22, 14, 8, 0.85), rgba(32, 20, 12, 0.8));
+    border-color: rgba(160, 135, 112, 0.18);
+}}
+
+.card.archived .card-name,
+.card.archived .card-value {{
+    color: #c9b896;
+}}
+
+.archive-badge {{
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: #a08770;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(160, 135, 112, 0.35);
+    padding: 3px 8px;
+    border-radius: 4px;
+}}
+
+.archive-notes {{
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(160, 135, 112, 0.18);
+    font-size: 12px;
+    color: #a08770;
+    font-style: italic;
+}}
+
+.empty-archive {{
+    color: #6b5544;
+    font-style: italic;
+    font-size: 13px;
+    text-align: center;
+    padding: 20px 0;
 }}
 
 .card-name {{
@@ -340,12 +478,18 @@ footer {{
         <div class="summary-gain {gain_class}">{sign}${total_gain:,.0f} · {sign}{total_gain_pct:.1f}%</div>
         <div class="summary-stats">
             <div><span>Total Paid</span><strong>${total_paid:,.0f}</strong></div>
-            <div><span>Bottles</span><strong>{len(cards)}</strong></div>
+            <div><span>Bottles</span><strong>{len(active_cards)}</strong></div>
         </div>
     </div>
 
+    <div class="section-header">Active Collection — {len(active_cards)} bottles, ${total_value:,.0f} current value</div>
     <div class="bottles">
-        {cards_html}
+        {active_html}
+    </div>
+
+    <div class="section-header">Archive — {len(archive_cards)} bottles, {arch_sign}${archive_realized_gain:,.0f} realized gain</div>
+    <div class="bottles">
+        {archive_inner}
     </div>
 
     <footer>

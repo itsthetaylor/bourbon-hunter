@@ -187,10 +187,13 @@ def main():
 
     with open(BOTTLES_CSV, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        bottles = list(reader)
+        all_bottles = list(reader)
+
+    bottles = [b for b in all_bottles if (b.get("status") or "active") == "active"]
+    archived_count = len(all_bottles) - len(bottles)
 
     timestamp = datetime.now().isoformat(timespec="seconds")
-    print(f"Loaded {len(bottles)} bottles from {BOTTLES_CSV}")
+    print(f"Loaded {len(bottles)} active bottles from {BOTTLES_CSV} ({archived_count} archived, skipped)")
     print(f"Run timestamp: {timestamp}")
 
     total_value = 0

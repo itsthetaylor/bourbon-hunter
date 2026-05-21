@@ -17,6 +17,7 @@ BOTTLES_CSV = Path("data/bottles.csv")
 
 FIELDNAMES = ["bottle_id", "name", "proof", "msrp", "acquisition_date",
               "acquisition_price", "batch", "bottle_code",
+              "status", "removed_date", "sale_price", "removal_notes",
               "wooden_cork_url", "bbb_url",
               "barrel_tap_url", "keg_n_bottle_url"]
 
@@ -136,6 +137,10 @@ def add_bottle(bottle_data):
         "acquisition_price": "",
         "batch": str(batch) if batch else "",
         "bottle_code": str(bottle_code) if bottle_code else "",
+        "status": "active",
+        "removed_date": "",
+        "sale_price": "",
+        "removal_notes": "",
         "wooden_cork_url": "",
         "bbb_url": "",
         "barrel_tap_url": "",
