@@ -4,12 +4,21 @@ Output: docs/index.html (GitHub Pages serves from /docs)
 """
 
 import csv
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BOTTLES_CSV = Path("data/bottles.csv")
 HISTORY_CSV = Path("data/price_history.csv")
 OUTPUT_DIR = Path("docs")
 OUTPUT_FILE = OUTPUT_DIR / "index.html"
+
+# Local Flask editor (Phase 2), reachable over Tailscale. The Edit/Archive
+# buttons on this public, read-only dashboard simply hand off to it.
+EDITOR_BASE = f"http://{os.getenv('FLASK_TAILSCALE_IP', '100.111.112.8')}:5000"
 
 
 def load_csv(path):
@@ -31,6 +40,7 @@ def build_active_card(bottle, snapshot):
         gain_pct = (gain_dollar / paid) * 100
 
     return {
+        "bottle_id": bottle["bottle_id"],
         "name": bottle["name"],
         "proof": bottle.get("proof", ""),
         "batch": bottle.get("batch", ""),
@@ -158,6 +168,10 @@ def render_active_card(c):
                 <div><span>Paid</span><strong>{paid_str}</strong></div>
                 <div><span>MSRP</span><strong>{msrp_str}</strong></div>
                 <div><span>Sources</span><strong>{c['sources_count']}</strong></div>
+            </div>
+            <div class="card-actions">
+                <a class="card-btn edit" href="{EDITOR_BASE}/#{c['bottle_id']}">Edit</a>
+                <a class="card-btn archive" href="{EDITOR_BASE}/#{c['bottle_id']}">Archive</a>
             </div>
         </div>
         """
@@ -455,6 +469,34 @@ h1 {{
     color: #f4e4c1;
     font-weight: 600;
 }}
+
+.card-actions {{
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+}}
+.card-btn {{
+    flex: 1;
+    text-align: center;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    padding: 11px 10px;
+    border-radius: 8px;
+    transition: border-color 0.2s, background 0.2s;
+}}
+.card-btn.edit {{
+    color: #f4e4c1;
+    background: rgba(90, 51, 24, 0.55);
+    border: 1px solid rgba(212, 165, 116, 0.4);
+}}
+.card-btn.archive {{
+    color: #e8b6b6;
+    background: rgba(58, 20, 20, 0.5);
+    border: 1px solid rgba(232, 134, 134, 0.35);
+}}
+.card-btn:hover {{ border-color: rgba(212, 165, 116, 0.7); }}
 
 footer {{
     text-align: center;

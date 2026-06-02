@@ -19,6 +19,10 @@ data/photos_failed/
 # Debug HTML dumps from scraper testing
 *_dump.html
 
+# Junk: a captured `git diff` accidentally saved as a file named ".csv"
+# (root-anchored so it never matches data/*.csv)
+/.csv
+
 # Test scripts (kept locally, not part of project)
 test_api.py
 test_scraper.py
