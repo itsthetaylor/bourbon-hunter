@@ -1,209 +1,96 @@
-import os
-import json
-import shutil
-import base64
-import csv
-import re
-from pathlib import Path
-from dotenv import load_dotenv
-from anthropic import Anthropic
+"""
+Local-folder intake.
 
-load_dotenv()
+Drop bottle photos into data/photos_to_process/ (front label + bottle bottom +
+back / hand-written info). This script:
+  1. reads each photo's capture time,
+  2. clusters photos within 180s into one bottle (intake_core.cluster_photos),
+  3. shows you the proposed grouping and waits for confirmation,
+  4. sends each bottle's photos to ONE vision call, and
+  5. writes the bottle to bottles.csv (atomic).
+
+All identification/clustering/writing logic lives in intake_core.py so this and
+drive_intake.py stay identical in behavior.
+"""
+
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+import intake_core as core
 
 PHOTOS_TO_PROCESS = Path("data/photos_to_process")
 PHOTOS_PROCESSED = Path("data/photos_processed")
 PHOTOS_FAILED = Path("data/photos_failed")
-BOTTLES_CSV = Path("data/bottles.csv")
 
-FIELDNAMES = ["bottle_id", "name", "proof", "msrp", "acquisition_date",
-              "acquisition_price", "batch", "bottle_code",
-              "status", "removed_date", "sale_price", "removal_notes",
-              "wooden_cork_url", "bbb_url",
-              "barrel_tap_url", "keg_n_bottle_url"]
-
-client = Anthropic()
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif",
+              ".heic", ".heif", ".tif", ".tiff"}
 
 
-def slugify(text):
-    text = text.lower()
-    text = re.sub(r"[^\w\s-]", "", text)
-    text = re.sub(r"[-\s]+", "_", text)
-    return text.strip("_")
+def _move_all(group, dest):
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in group:
+        shutil.move(str(p["path"]), str(dest / p["path"].name))
 
 
-def identify_bottle(image_path):
-    with open(image_path, "rb") as f:
-        image_data = base64.standard_b64encode(f.read()).decode("utf-8")
-
-    suffix = image_path.suffix.lower()
-    media_type = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-    }.get(suffix, "image/jpeg")
-
-    prompt = """You are identifying a bourbon/whiskey bottle from a photo.
-
-IMPORTANT: Different batches of the same product (e.g., two EH Taylor Barrel
-Proof bottles at 127.4 vs 127.3 proof) are DIFFERENT bottles. Capture every
-distinguishing detail you can see so they can be told apart later.
-
-Look carefully at:
-- The front label (product name, distillery, age statement, MSRP)
-- The neck label / back label
-- Hand-written or stamped text anywhere on the label
-- The BOTTOM of the bottle and the BACK of the bottle if visible
-  (batch numbers, bottle codes, dump dates, and exact proofs are often there)
-
-Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
-
-{
-  "name": "Full bottle name as commonly referenced",
-  "distillery": "Distillery or brand",
-  "proof": "Exact proof to one decimal place if visible (e.g. \\"127.4\\", not \\"127\\"). Null if not visible.",
-  "batch": "Batch identifier if visible (e.g. \\"Batch 11\\", \\"B11\\", \\"Batch C923\\", or any hand-written batch text). Null if not visible.",
-  "year": "Release year or vintage if visible, or null",
-  "bottle_code": "Any other distinguishing identifier on the bottle — bottling/dump date, lot code, barrel number, hand-written annotation, stamped code, etc. Null if none visible.",
-  "msrp": "MSRP in USD as a number, or null if unknown",
-  "confidence": "high, medium, or low",
-  "notes": "Any uncertainty or details to flag for the user, including anything you saw but couldn't fully read"
-}
-
-If you cannot identify the bottle at all, return:
-{"error": "could not identify"}
-"""
-
-    message = client.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=500,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": image_data,
-                        },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
+def main():
+    paths = sorted(
+        p for p in PHOTOS_TO_PROCESS.iterdir()
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     )
-
-    text = message.content[0].text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return {"error": "invalid response", "raw": text}
-
-
-def load_bottles():
-    if not BOTTLES_CSV.exists():
-        return []
-    with open(BOTTLES_CSV, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        return list(reader)
-
-
-def save_bottles(bottles):
-    with open(BOTTLES_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(bottles)
-
-
-def add_bottle(bottle_data):
-    bottle_id = slugify(bottle_data["name"])
-    proof = bottle_data.get("proof") or ""
-    msrp = bottle_data.get("msrp") or ""
-    batch = bottle_data.get("batch") or ""
-    bottle_code = bottle_data.get("bottle_code") or ""
-
-    new_row = {
-        "bottle_id": bottle_id,
-        "name": bottle_data["name"],
-        "proof": str(proof) if proof else "",
-        "msrp": str(msrp) if msrp else "",
-        "acquisition_date": "",
-        "acquisition_price": "",
-        "batch": str(batch) if batch else "",
-        "bottle_code": str(bottle_code) if bottle_code else "",
-        "status": "active",
-        "removed_date": "",
-        "sale_price": "",
-        "removal_notes": "",
-        "wooden_cork_url": "",
-        "bbb_url": "",
-        "barrel_tap_url": "",
-        "keg_n_bottle_url": "",
-    }
-
-    bottles = load_bottles()
-
-    for b in bottles:
-        if b["bottle_id"] == bottle_id:
-            return bottle_id, "duplicate"
-
-    bottles.append(new_row)
-    save_bottles(bottles)
-    return bottle_id, "added"
-
-
-def process_photos():
-    images = [p for p in PHOTOS_TO_PROCESS.iterdir()
-              if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}]
-
-    if not images:
+    if not paths:
         print(f"No photos found in {PHOTOS_TO_PROCESS}")
         return
 
-    print(f"Found {len(images)} photo(s) to process\n")
+    photos = []
+    for p in paths:
+        photos.append({
+            "key": p.name,
+            "bytes": p.read_bytes(),
+            "mime": core.mime_from_name(p.name),
+            "fallback_time": datetime.fromtimestamp(p.stat().st_mtime),
+            "path": p,
+        })
 
-    for image_path in images:
-        print(f"Processing: {image_path.name}")
+    print(f"Found {len(photos)} photo(s); reading capture times...")
+    groups, problem = core.cluster_photos(photos)
+    if problem:
+        print("\n  Cannot group photos:\n  " + problem)
+        print("\nNothing was written.")
+        return
+
+    if not core.confirm_groups(groups):
+        print("Aborted — nothing written.")
+        return
+
+    for i, group in enumerate(groups, 1):
+        keys = ", ".join(p["key"] for p in group)
+        print(f"\nBottle {i}: {keys}")
         print("-" * 60)
 
-        result = identify_bottle(image_path)
+        result = core.identify_bottle([(p["bytes"], p["mime"]) for p in group])
 
         if "error" in result:
             print(f"  Failed: {result['error']}")
             if "raw" in result:
                 print(f"  Raw response: {result['raw'][:200]}")
-            shutil.move(str(image_path), str(PHOTOS_FAILED / image_path.name))
-            print(f"  Moved to: {PHOTOS_FAILED}")
-            print()
+            _move_all(group, PHOTOS_FAILED)
+            print(f"  Moved {len(group)} photo(s) to {PHOTOS_FAILED}")
             continue
 
-        print(f"  Name:       {result.get('name')}")
-        print(f"  Distillery: {result.get('distillery')}")
-        print(f"  Proof:      {result.get('proof')}")
-        print(f"  Batch:      {result.get('batch')}")
-        print(f"  Year:       {result.get('year')}")
-        print(f"  Code:       {result.get('bottle_code')}")
-        print(f"  MSRP:       {result.get('msrp')}")
-        print(f"  Confidence: {result.get('confidence')}")
-        if result.get("notes"):
-            print(f"  Notes:      {result.get('notes')}")
+        core.print_result(result)
 
-        bottle_id, status = add_bottle(result)
+        bottle_id, status = core.add_bottle(result)
         if status == "duplicate":
             print(f"  Already in collection (id: {bottle_id}) — skipped")
+        elif status == "no_name":
+            print("  Model returned no name — skipped (not written)")
         else:
             print(f"  Added to bottles.csv as: {bottle_id}")
 
-        shutil.move(str(image_path), str(PHOTOS_PROCESSED / image_path.name))
-        print(f"  Moved to: {PHOTOS_PROCESSED}")
-        print()
+        _move_all(group, PHOTOS_PROCESSED)
+        print(f"  Moved {len(group)} photo(s) to {PHOTOS_PROCESSED}")
 
 
 if __name__ == "__main__":
-    process_photos()
+    main()

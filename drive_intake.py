@@ -1,12 +1,22 @@
-import os
+"""
+Google Drive intake.
+
+Pulls bottle photos from the Drive 'Bourbon Hunter/photos_to_process' folder,
+then uses the SAME shared logic as the local path (intake_core):
+  1. download every intake photo (we read EXIF from the bytes, so local and
+     Drive clustering are one identical code path),
+  2. cluster photos within 180s into one bottle,
+  3. show the proposed grouping and wait for confirmation,
+  4. send each bottle's photos to ONE vision call,
+  5. write to bottles.csv (atomic) and move that bottle's photos to processed/failed.
+"""
+
 import io
-import json
-import base64
-import csv
-import re
+import os
+from datetime import datetime
 from pathlib import Path
+
 from dotenv import load_dotenv
-from anthropic import Anthropic
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -14,10 +24,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-from PIL import Image
-import pillow_heif
-
-pillow_heif.register_heif_opener()
+import intake_core as core
 
 load_dotenv()
 
@@ -29,18 +36,6 @@ DRIVE_FOLDER_NAME = "Bourbon Hunter"
 INTAKE_FOLDER_NAME = "photos_to_process"
 PROCESSED_FOLDER_NAME = "photos_processed"
 FAILED_FOLDER_NAME = "photos_failed"
-
-BOTTLES_CSV = Path("data/bottles.csv")
-
-FIELDNAMES = ["bottle_id", "name", "proof", "msrp", "acquisition_date",
-              "acquisition_price", "batch", "bottle_code",
-              "status", "removed_date", "sale_price", "removal_notes",
-              "wooden_cork_url", "bbb_url",
-              "barrel_tap_url", "keg_n_bottle_url"]
-
-CLAUDE_SUPPORTED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
-
-claude = Anthropic()
 
 
 def authenticate_drive():
@@ -67,34 +62,31 @@ def get_or_create_folder(service, name, parent_id=None):
 
     results = service.files().list(q=query, fields="files(id, name)").execute()
     items = results.get("files", [])
-
     if items:
         return items[0]["id"]
 
     metadata = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
     if parent_id:
         metadata["parents"] = [parent_id]
-
     folder = service.files().create(body=metadata, fields="id").execute()
     return folder["id"]
 
 
 def setup_drive_folders(service):
     root_id = get_or_create_folder(service, DRIVE_FOLDER_NAME)
-    intake_id = get_or_create_folder(service, INTAKE_FOLDER_NAME, root_id)
-    processed_id = get_or_create_folder(service, PROCESSED_FOLDER_NAME, root_id)
-    failed_id = get_or_create_folder(service, FAILED_FOLDER_NAME, root_id)
     return {
         "root": root_id,
-        "intake": intake_id,
-        "processed": processed_id,
-        "failed": failed_id,
+        "intake": get_or_create_folder(service, INTAKE_FOLDER_NAME, root_id),
+        "processed": get_or_create_folder(service, PROCESSED_FOLDER_NAME, root_id),
+        "failed": get_or_create_folder(service, FAILED_FOLDER_NAME, root_id),
     }
 
 
 def list_intake_photos(service, intake_folder_id):
     query = f"'{intake_folder_id}' in parents and trashed=false and (mimeType contains 'image/')"
-    results = service.files().list(q=query, fields="files(id, name, mimeType)").execute()
+    results = service.files().list(
+        q=query, fields="files(id, name, mimeType, modifiedTime)"
+    ).execute()
     return results.get("files", [])
 
 
@@ -119,143 +111,14 @@ def move_file(service, file_id, new_parent_id):
     ).execute()
 
 
-def normalize_image(image_bytes, mime_type):
-    """Convert image to a Claude-supported format if needed.
-    Returns (bytes, mime_type) tuple."""
-    if mime_type in CLAUDE_SUPPORTED_TYPES:
-        return image_bytes, mime_type
-
-    # Convert via Pillow (handles HEIC and anything else Pillow can read)
-    img = Image.open(io.BytesIO(image_bytes))
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    output = io.BytesIO()
-    img.save(output, format="JPEG", quality=90)
-    return output.getvalue(), "image/jpeg"
-
-
-def slugify(text):
-    text = text.lower()
-    text = re.sub(r"[^\w\s-]", "", text)
-    text = re.sub(r"[-\s]+", "_", text)
-    return text.strip("_")
-
-
-def identify_bottle(image_bytes, mime_type):
-    image_bytes, mime_type = normalize_image(image_bytes, mime_type)
-    image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
-
-    prompt = """You are identifying a bourbon/whiskey bottle from a photo.
-
-IMPORTANT: Different batches of the same product (e.g., two EH Taylor Barrel
-Proof bottles at 127.4 vs 127.3 proof) are DIFFERENT bottles. Capture every
-distinguishing detail you can see so they can be told apart later.
-
-Look carefully at:
-- The front label (product name, distillery, age statement, MSRP)
-- The neck label / back label
-- Hand-written or stamped text anywhere on the label
-- The BOTTOM of the bottle and the BACK of the bottle if visible
-  (batch numbers, bottle codes, dump dates, and exact proofs are often there)
-
-Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
-
-{
-  "name": "Full bottle name as commonly referenced",
-  "distillery": "Distillery or brand",
-  "proof": "Exact proof to one decimal place if visible (e.g. \\"127.4\\", not \\"127\\"). Null if not visible.",
-  "batch": "Batch identifier if visible (e.g. \\"Batch 11\\", \\"B11\\", \\"Batch C923\\", or any hand-written batch text). Null if not visible.",
-  "year": "Release year or vintage if visible, or null",
-  "bottle_code": "Any other distinguishing identifier on the bottle — bottling/dump date, lot code, barrel number, hand-written annotation, stamped code, etc. Null if none visible.",
-  "msrp": "MSRP in USD as a number, or null if unknown",
-  "confidence": "high, medium, or low",
-  "notes": "Any uncertainty or details to flag for the user, including anything you saw but couldn't fully read"
-}
-
-If you cannot identify the bottle at all, return:
-{"error": "could not identify"}
-"""
-
-    message = claude.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=500,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime_type,
-                            "data": image_data,
-                        },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-    )
-
-    text = message.content[0].text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
+def _parse_drive_time(s):
+    """Drive modifiedTime (RFC3339, e.g. 2026-06-03T12:34:56.000Z) -> datetime."""
+    if not s:
+        return None
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return {"error": "invalid response", "raw": text}
-
-
-def load_bottles():
-    if not BOTTLES_CSV.exists():
-        return []
-    with open(BOTTLES_CSV, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        return list(reader)
-
-
-def save_bottles(bottles):
-    with open(BOTTLES_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(bottles)
-
-
-def add_bottle(bottle_data):
-    bottle_id = slugify(bottle_data["name"])
-    proof = bottle_data.get("proof") or ""
-    msrp = bottle_data.get("msrp") or ""
-    batch = bottle_data.get("batch") or ""
-    bottle_code = bottle_data.get("bottle_code") or ""
-
-    new_row = {
-        "bottle_id": bottle_id,
-        "name": bottle_data["name"],
-        "proof": str(proof) if proof else "",
-        "msrp": str(msrp) if msrp else "",
-        "acquisition_date": "",
-        "acquisition_price": "",
-        "batch": str(batch) if batch else "",
-        "bottle_code": str(bottle_code) if bottle_code else "",
-        "status": "active",
-        "removed_date": "",
-        "sale_price": "",
-        "removal_notes": "",
-        "wooden_cork_url": "",
-        "bbb_url": "",
-        "barrel_tap_url": "",
-        "keg_n_bottle_url": "",
-    }
-
-    bottles = load_bottles()
-    for b in bottles:
-        if b["bottle_id"] == bottle_id:
-            return bottle_id, "duplicate"
-
-    bottles.append(new_row)
-    save_bottles(bottles)
-    return bottle_id, "added"
+        return datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
 
 
 def main():
@@ -264,62 +127,70 @@ def main():
 
     print("Setting up folder structure...")
     folders = setup_drive_folders(service)
-    print(f"  Drive folder: {DRIVE_FOLDER_NAME}/")
-    print(f"    {INTAKE_FOLDER_NAME}/")
-    print(f"    {PROCESSED_FOLDER_NAME}/")
-    print(f"    {FAILED_FOLDER_NAME}/")
+    print(f"  {DRIVE_FOLDER_NAME}/{INTAKE_FOLDER_NAME}/")
 
-    photos = list_intake_photos(service, folders["intake"])
-
-    if not photos:
+    files = list_intake_photos(service, folders["intake"])
+    if not files:
         print(f"\nNo photos found in Drive '{INTAKE_FOLDER_NAME}' folder.")
-        print("Drop bottle photos in that folder from your phone and re-run this script.")
+        print("Drop bottle photos in that folder from your phone and re-run.")
         return
 
-    print(f"\nFound {len(photos)} photo(s) to process\n")
+    print(f"\nFound {len(files)} photo(s); downloading to read capture time...")
+    photos = []
+    for f in files:
+        try:
+            data = download_file(service, f["id"])
+        except Exception as e:
+            print(f"  Failed to download {f['name']}: {e}")
+            print("Stopping — nothing written. Re-run once Drive is reachable.")
+            return
+        photos.append({
+            "key": f["name"],
+            "bytes": data,
+            "mime": f.get("mimeType") or core.mime_from_name(f["name"]),
+            "fallback_time": _parse_drive_time(f.get("modifiedTime")),
+            "file_id": f["id"],
+        })
 
-    for photo in photos:
-        print(f"Processing: {photo['name']}")
+    groups, problem = core.cluster_photos(photos)
+    if problem:
+        print("\n  Cannot group photos:\n  " + problem)
+        print("\nNothing was written.")
+        return
+
+    if not core.confirm_groups(groups):
+        print("Aborted — nothing written.")
+        return
+
+    for i, group in enumerate(groups, 1):
+        keys = ", ".join(p["key"] for p in group)
+        print(f"\nBottle {i}: {keys}")
         print("-" * 60)
 
-        try:
-            image_bytes = download_file(service, photo["id"])
-        except Exception as e:
-            print(f"  Failed to download: {e}")
-            print()
-            continue
-
-        result = identify_bottle(image_bytes, photo["mimeType"])
+        result = core.identify_bottle([(p["bytes"], p["mime"]) for p in group])
 
         if "error" in result:
             print(f"  Failed: {result['error']}")
             if "raw" in result:
                 print(f"  Raw response: {result['raw'][:200]}")
-            move_file(service, photo["id"], folders["failed"])
-            print(f"  Moved to: {FAILED_FOLDER_NAME}/")
-            print()
+            for p in group:
+                move_file(service, p["file_id"], folders["failed"])
+            print(f"  Moved {len(group)} photo(s) to {FAILED_FOLDER_NAME}/")
             continue
 
-        print(f"  Name:       {result.get('name')}")
-        print(f"  Distillery: {result.get('distillery')}")
-        print(f"  Proof:      {result.get('proof')}")
-        print(f"  Batch:      {result.get('batch')}")
-        print(f"  Year:       {result.get('year')}")
-        print(f"  Code:       {result.get('bottle_code')}")
-        print(f"  MSRP:       {result.get('msrp')}")
-        print(f"  Confidence: {result.get('confidence')}")
-        if result.get("notes"):
-            print(f"  Notes:      {result.get('notes')}")
+        core.print_result(result)
 
-        bottle_id, status = add_bottle(result)
+        bottle_id, status = core.add_bottle(result)
         if status == "duplicate":
             print(f"  Already in collection (id: {bottle_id}) — skipped")
+        elif status == "no_name":
+            print("  Model returned no name — skipped (not written)")
         else:
             print(f"  Added to bottles.csv as: {bottle_id}")
 
-        move_file(service, photo["id"], folders["processed"])
-        print(f"  Moved to: {PROCESSED_FOLDER_NAME}/")
-        print()
+        for p in group:
+            move_file(service, p["file_id"], folders["processed"])
+        print(f"  Moved {len(group)} photo(s) to {PROCESSED_FOLDER_NAME}/")
 
 
 if __name__ == "__main__":
