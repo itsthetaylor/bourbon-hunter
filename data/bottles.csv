@@ -1,1 +1,6 @@
 bottle_id,name,proof,msrp,acquisition_date,acquisition_price,batch,bottle_code,status,removed_date,sale_price,removal_notes,wooden_cork_url,bbb_url,barrel_tap_url,keg_n_bottle_url
+weller_single_barrel,Weller Single Barrel,97,,,,,L280 0115:43,active,,,,,,,
+stagg_kentucky_straight_bourbon_whiskey,Stagg Kentucky Straight Bourbon Whiskey,126.5,,,,25A,,active,,,,,,,
+blantons_single_barrel_japanese_export,Blanton's Single Barrel Japanese Export,80,,,,,Dumped on 3-12-24 from Barrel No. 536 on Rick No. 84. Registered Bottle No. 1163,active,,,,,,,
+blantons_single_barrel_bourbon_121_8,Blanton's Single Barrel Bourbon,121.8,,,,,"Dumped on 8-5-24, From Barrel No. 226, In Warehouse H, On Rick No. 34, Alc/Vol% 60.9",active,,,,,,,
+blantons_gold_edition,Blanton's Gold Edition,103,,,,,"Barrel No. 218, Rack No. 9, dumped on 12-18-25, stored in Warehouse H",active,,,,,,,

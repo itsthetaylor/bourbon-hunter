@@ -16,14 +16,29 @@ Keeping it in one place means the local and Drive paths can never drift apart.
 import io
 import os
 import re
+import sys
 import json
 import base64
 import uuid
 from datetime import datetime
 
+# Windows cmd defaults to cp1252; bottle notes often contain Unicode (apostrophes,
+# em-dashes, etc.). Reconfigure stdout/stderr to UTF-8 so print never throws
+# UnicodeEncodeError — worst case a character is replaced, not a crash.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from PIL import Image, ExifTags
 import pillow_heif
 from dotenv import load_dotenv
+
+# load_dotenv MUST run before importing anthropic — the SDK reads
+# ANTHROPIC_API_KEY at import time and caches it. override=True ensures
+# the .env value wins over a stale empty system/user environment variable.
+load_dotenv(override=True)
+
 from anthropic import Anthropic
 
 from archive_bottle import (
@@ -33,7 +48,6 @@ from archive_bottle import (
     save_bottles,
 )
 
-load_dotenv()
 pillow_heif.register_heif_opener()  # lets Pillow open .heic/.heif (iPhone photos)
 
 MODEL = "claude-sonnet-4-5"
@@ -242,11 +256,18 @@ def format_groups(groups):
     return "\n".join(lines)
 
 
-def confirm_groups(groups):
-    """Show the proposed grouping and ask before any CSV write. Returns bool."""
+def confirm_groups(groups, yes=False):
+    """Show the proposed grouping and ask before any CSV write. Returns bool.
+
+    Pass yes=True (or --yes on the CLI) to skip the interactive prompt and
+    proceed automatically — useful when stdin is not a terminal.
+    """
     print("\nProposed grouping — one bottle per group, [exif] vs [file] shows the "
           "time source:")
     print(format_groups(groups))
+    if yes:
+        print(f"\n--yes flag set: proceeding with {len(groups)} bottle(s).")
+        return True
     ans = input(
         f"\nProceed to identify & write {len(groups)} bottle(s)? [y/N]: "
     ).strip().lower()
@@ -277,7 +298,13 @@ def identify_bottle(images):
     """
     global _client
     if _client is None:
-        _client = Anthropic()
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not _api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY is empty. Check your .env file and ensure "
+                "it is set before importing anthropic."
+            )
+        _client = Anthropic(api_key=_api_key)
 
     content = []
     for image_bytes, mime_type in images:

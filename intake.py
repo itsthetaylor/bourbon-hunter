@@ -13,6 +13,7 @@ All identification/clustering/writing logic lives in intake_core.py so this and
 drive_intake.py stay identical in behavior.
 """
 
+import sys
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,8 @@ def _move_all(group, dest):
 
 
 def main():
+    yes = "--yes" in sys.argv
+
     paths = sorted(
         p for p in PHOTOS_TO_PROCESS.iterdir()
         if p.is_file() and p.suffix.lower() in IMAGE_EXTS
@@ -59,7 +62,7 @@ def main():
         print("\nNothing was written.")
         return
 
-    if not core.confirm_groups(groups):
+    if not core.confirm_groups(groups, yes=yes):
         print("Aborted — nothing written.")
         return
 

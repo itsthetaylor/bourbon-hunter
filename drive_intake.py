@@ -13,6 +13,7 @@ then uses the SAME shared logic as the local path (intake_core):
 
 import io
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -129,6 +130,8 @@ def main():
     folders = setup_drive_folders(service)
     print(f"  {DRIVE_FOLDER_NAME}/{INTAKE_FOLDER_NAME}/")
 
+    yes = "--yes" in sys.argv
+
     files = list_intake_photos(service, folders["intake"])
     if not files:
         print(f"\nNo photos found in Drive '{INTAKE_FOLDER_NAME}' folder.")
@@ -158,7 +161,7 @@ def main():
         print("\nNothing was written.")
         return
 
-    if not core.confirm_groups(groups):
+    if not core.confirm_groups(groups, yes=yes):
         print("Aborted — nothing written.")
         return
 
