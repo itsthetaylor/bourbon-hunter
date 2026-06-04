@@ -24,7 +24,8 @@ EDITOR_BASE = f"http://{os.getenv('FLASK_TAILSCALE_IP', '100.111.112.8')}:5000"
 def load_csv(path):
     if not path.exists():
         return []
-    with open(path, newline="", encoding="utf-8") as f:
+    # utf-8-sig strips a leading BOM if present; harmless on plain utf-8 files.
+    with open(path, newline="", encoding="utf-8-sig") as f:
         return list(csv.DictReader(f))
 
 

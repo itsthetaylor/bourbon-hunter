@@ -124,8 +124,7 @@ def get_price_keg_n_bottle(url):
 
 def append_history_row(row):
     file_exists = HISTORY_CSV.exists()
-    # Migration: if existing file doesn't have new columns, this will fail silently on read
-    with open(HISTORY_CSV, "a", newline="", encoding="utf-8") as f:
+    with open(HISTORY_CSV, "a", newline="", encoding="utf-8") as f:  # plain utf-8, no BOM
         writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES)
         if not file_exists:
             writer.writeheader()
@@ -211,7 +210,7 @@ def main():
         print(f"ERROR: {BOTTLES_CSV} not found")
         return
 
-    with open(BOTTLES_CSV, newline="", encoding="utf-8") as f:
+    with open(BOTTLES_CSV, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         all_bottles = list(reader)
 
