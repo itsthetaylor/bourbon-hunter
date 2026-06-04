@@ -126,7 +126,7 @@ def edit(bottle_id):
             target[key] = request.form.get(key, "").strip()
 
     save_bottles(bottles, fieldnames)
-    return redirect(url_for("index"))
+    return redirect(url_for("index") + f"#{bottle_id}")
 
 
 @app.route("/archive/<bottle_id>", methods=["POST"])
@@ -139,7 +139,7 @@ def archive(bottle_id):
         archive_bottle(bottle_id, status, sale_price, notes)
     except ValueError as e:
         return _render_index(error=str(e), status_code=400)
-    return redirect(url_for("index"))
+    return redirect(url_for("index") + f"#{bottle_id}")
 
 
 @app.route("/urls")

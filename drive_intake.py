@@ -155,6 +155,19 @@ def main():
             "file_id": f["id"],
         })
 
+    # Deduplicate by filename — Drive occasionally returns the same file twice
+    # (e.g. if a photo was synced multiple times), which wastes API quota and
+    # can inflate a group past the per-call image limit.
+    seen_keys = set()
+    deduped = []
+    for p in photos:
+        if p["key"] not in seen_keys:
+            seen_keys.add(p["key"])
+            deduped.append(p)
+    if len(deduped) < len(photos):
+        print(f"  Deduplicated {len(photos) - len(deduped)} duplicate filename(s); {len(deduped)} unique photo(s) remain.")
+    photos = deduped
+
     groups, problem = core.cluster_photos(photos)
     if problem:
         print("\n  Cannot group photos:\n  " + problem)

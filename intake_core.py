@@ -53,6 +53,7 @@ pillow_heif.register_heif_opener()  # lets Pillow open .heic/.heif (iPhone photo
 MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 600
 CLUSTER_WINDOW_SECONDS = 180  # photos within this gap = same bottle
+MAX_IMAGES_PER_CALL = 6       # cap images per vision call — large HEIC batches hit the 413 limit
 
 CLAUDE_SUPPORTED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
@@ -294,8 +295,12 @@ def identify_bottle(images):
     """Identify one bottle from a list of (image_bytes, mime_type) tuples.
 
     All images are sent in a single vision call so the model can combine detail
-    from the front label, bottle bottom, and back.
+    from the front label, bottle bottom, and back. Capped at MAX_IMAGES_PER_CALL
+    to avoid hitting the API request-size limit.
     """
+    if len(images) > MAX_IMAGES_PER_CALL:
+        print(f"  Note: {len(images)} images in group; sending first {MAX_IMAGES_PER_CALL} to stay under API size limit.")
+        images = images[:MAX_IMAGES_PER_CALL]
     global _client
     if _client is None:
         _api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
