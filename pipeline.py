@@ -39,14 +39,40 @@ def get_price_wooden_cork(url):
 
 
 def get_price_bbb(url, target_proof=None):
+    """Scrape a market estimate from Bottle Blue Book.
+
+    Handles two URL patterns:
+      /bottle/NNN/  — individual bottle page; price is in the "Market Data"
+                      box-enclosure as a plain h3 ("$215 - $245").
+      /group/NN/    — group page listing multiple bottles as card anchors;
+                      optionally filtered by proof to pick the right card.
+    Returns the midpoint of the price range, or None if nothing is found.
+    """
     if not url:
         return None
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
         return None
     soup = BeautifulSoup(response.text, "html.parser")
-    bottle_boxes = soup.find_all("a", class_="bottle_listings_box")
 
+    # --- Individual bottle page (/bottle/NNN/) ---
+    if "/bottle/" in url:
+        for box in soup.select("div.box-enclosure"):
+            hdr = box.find("h2", class_="box-header")
+            if hdr and "Market Data" in hdr.get_text():
+                h3 = box.select_one("div.text-center h3.no_margin")
+                if h3:
+                    matches = re.findall(r"\$[\d,]+", h3.get_text())
+                    if len(matches) >= 2:
+                        low = float(matches[0].replace("$", "").replace(",", ""))
+                        high = float(matches[1].replace("$", "").replace(",", ""))
+                        return (low + high) / 2
+                    elif len(matches) == 1:
+                        return float(matches[0].replace("$", "").replace(",", ""))
+        return None
+
+    # --- Group page (/group/NN/) — iterate cards, optionally filter by proof ---
+    bottle_boxes = soup.find_all("a", class_="bottle_listings_box")
     for box in bottle_boxes:
         text = box.get_text()
         if target_proof and (f"Proof:" not in text or target_proof not in text):
