@@ -15,7 +15,9 @@ DATA-SAFETY CONTRACT (do not break):
 """
 
 import csv
+import logging
 import os
+import traceback
 from pathlib import Path
 
 from flask import (
@@ -41,6 +43,25 @@ PORT = 5000
 
 app = Flask(__name__)
 
+# Log all exceptions to stderr so they appear in the console even when
+# debug=False. Without this, a crash inside a route returns a blank 500
+# with no output.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+app.logger.setLevel(logging.INFO)
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Catch-all: log the full traceback and return a readable error page."""
+    app.logger.error("Unhandled exception:\n%s", traceback.format_exc())
+    return (
+        f"<pre style='color:red;padding:20px'>Error: {e}\n\n{traceback.format_exc()}</pre>",
+        500,
+    )
+
 # Editable price-source URL columns, paired with the pipeline scraper that knows
 # how to pull a price from that source (used by /verify_url).
 URL_FIELDS = [
@@ -63,7 +84,7 @@ def latest_market_values():
     if not HISTORY_CSV.exists():
         return {}
     latest = {}
-    with open(HISTORY_CSV, newline="", encoding="utf-8") as f:
+    with open(HISTORY_CSV, newline="", encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
             bid = row.get("bottle_id")
             if not bid:
@@ -79,15 +100,23 @@ def active_bottles():
 
 
 def _render_index(error=None, status_code=200):
-    html = render_template_string(
-        INDEX_TEMPLATE,
-        bottles=active_bottles(),
-        market=latest_market_values(),
-        url_labels=URL_LABELS,
-        statuses=VALID_STATUSES,
-        editor_base=f"http://{TAILSCALE_IP}:{PORT}",
-        error=error,
-    )
+    try:
+        html = render_template_string(
+            INDEX_TEMPLATE,
+            bottles=active_bottles(),
+            market=latest_market_values(),
+            url_labels=URL_LABELS,
+            statuses=VALID_STATUSES,
+            editor_base=f"http://{TAILSCALE_IP}:{PORT}",
+            error=error,
+        )
+    except Exception as e:
+        app.logger.error("_render_index crashed:\n%s", traceback.format_exc())
+        return (
+            f"<pre style='color:red;padding:20px'>Render error: {e}\n\n"
+            f"{traceback.format_exc()}</pre>",
+            500,
+        )
     return (html, status_code) if status_code != 200 else html
 
 
