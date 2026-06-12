@@ -52,7 +52,7 @@ pillow_heif.register_heif_opener()  # lets Pillow open .heic/.heif (iPhone photo
 
 MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 600
-CLUSTER_WINDOW_SECONDS = 180  # photos within this gap = same bottle
+CLUSTER_WINDOW_SECONDS = 90   # photos within this gap = same bottle
 MAX_IMAGES_PER_CALL = 6       # cap images per vision call — large HEIC batches hit the 413 limit
 
 CLAUDE_SUPPORTED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
