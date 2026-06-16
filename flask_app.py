@@ -39,7 +39,7 @@ load_dotenv()
 
 HISTORY_CSV = Path("data/price_history.csv")  # READ-ONLY here
 TAILSCALE_IP = os.getenv("FLASK_TAILSCALE_IP", "127.0.0.1")
-PORT = 5000
+PORT = 5001
 
 app = Flask(__name__)
 

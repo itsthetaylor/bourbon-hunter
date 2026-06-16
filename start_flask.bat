@@ -24,7 +24,7 @@ if errorlevel 1 (
 echo.
 echo ============================================================
 echo   Bourbon Hunter editor is starting...
-echo   Open on your phone:  http://100.111.112.8:5000
+echo   Open on your phone:  http://100.111.112.8:5001
 echo ============================================================
 echo.
 

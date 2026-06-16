@@ -18,7 +18,7 @@ OUTPUT_FILE = OUTPUT_DIR / "index.html"
 
 # Local Flask editor (Phase 2), reachable over Tailscale. The Edit/Archive
 # buttons on this public, read-only dashboard simply hand off to it.
-EDITOR_BASE = f"http://{os.getenv('FLASK_TAILSCALE_IP', '100.111.112.8')}:5000"
+EDITOR_BASE = f"http://{os.getenv('FLASK_TAILSCALE_IP', '100.111.112.8')}:5001"
 
 
 def load_csv(path):
