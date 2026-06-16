@@ -365,6 +365,12 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
           {%- else %}—{% endif %}
         </div>
       </div>
+      <div style="text-align:center">
+        <div class="market-lbl">MSRP</div>
+        <div class="market-val" style="font-size:20px; color:#a08770">
+          {%- if b.msrp %}${{ '%.0f'|format(b.msrp|float) }}{% else %}—{% endif %}
+        </div>
+      </div>
       <div style="text-align:right">
         <div class="market-lbl">Sources</div>
         <div class="market-val" style="font-size:18px">
