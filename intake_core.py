@@ -424,6 +424,7 @@ def add_bottle(bottle_data):
         "name": name,
         "proof": proof,
         "msrp": _clean(bottle_data.get("msrp")),
+        "quantity": "1",
         "batch": batch,
         "bottle_code": _clean(bottle_data.get("bottle_code")),
         "status": "active",

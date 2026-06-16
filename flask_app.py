@@ -150,6 +150,21 @@ def edit(bottle_id):
                     error=f"'{ap}' is not a valid acquisition price.", status_code=400
                 )
 
+    if "quantity" in request.form:
+        qty = request.form.get("quantity", "").strip()
+        if qty == "":
+            target["quantity"] = "1"
+        else:
+            try:
+                q = int(qty)
+                if q < 1:
+                    raise ValueError
+                target["quantity"] = str(q)
+            except ValueError:
+                return _render_index(
+                    error=f"'{qty}' is not a valid quantity.", status_code=400
+                )
+
     for key in URL_KEYS:
         if key in request.form:
             target[key] = request.form.get(key, "").strip()
@@ -359,10 +374,20 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     </div>
 
     <form method="post" action="{{ url_for('edit', bottle_id=b.bottle_id) }}">
-      <label class="fld" for="ap_{{ b.bottle_id }}">Acquisition price ($)</label>
-      <input type="number" step="0.01" inputmode="decimal" id="ap_{{ b.bottle_id }}"
-             name="acquisition_price" value="{{ b.acquisition_price }}"
-             placeholder="what you paid">
+      <div class="row2">
+        <div>
+          <label class="fld" for="ap_{{ b.bottle_id }}">Acquisition price ($)</label>
+          <input type="number" step="0.01" inputmode="decimal" id="ap_{{ b.bottle_id }}"
+                 name="acquisition_price" value="{{ b.acquisition_price }}"
+                 placeholder="what you paid">
+        </div>
+        <div>
+          <label class="fld" for="qty_{{ b.bottle_id }}">Quantity</label>
+          <input type="number" min="1" step="1" inputmode="numeric"
+                 id="qty_{{ b.bottle_id }}" name="quantity"
+                 value="{{ b.quantity or '1' }}">
+        </div>
+      </div>
 
       {% for key, label in url_labels %}
       <label class="fld">{{ label }} URL</label>

@@ -46,6 +46,7 @@ def build_active_card(bottle, snapshot):
         "proof": bottle.get("proof", ""),
         "batch": bottle.get("batch", ""),
         "bottle_code": bottle.get("bottle_code", ""),
+        "quantity": int(bottle.get("quantity") or 1),
         "market_value": market_value,
         "msrp": msrp,
         "paid": paid,
@@ -100,8 +101,8 @@ def build_dashboard():
             snapshot = latest_by_bottle.get(bottle["bottle_id"])
             card = build_active_card(bottle, snapshot)
             if card["paid"] and card["market_value"]:
-                total_paid += card["paid"]
-                total_value += card["market_value"]
+                total_paid += card["paid"] * card["quantity"]
+                total_value += card["market_value"] * card["quantity"]
             active_cards.append(card)
         else:
             card = build_archive_card(bottle)
@@ -157,9 +158,17 @@ def render_active_card(c):
         subtitle_parts.append(c["bottle_code"])
     subtitle = " · ".join(subtitle_parts) if subtitle_parts else "—"
 
+    qty = c["quantity"]
+    qty_badge = (
+        f' <span style="font-size:12px;font-weight:700;color:#d4a574;'
+        f'background:rgba(212,165,116,.15);border:1px solid rgba(212,165,116,.3);'
+        f'border-radius:5px;padding:2px 8px;vertical-align:middle">\xd7{qty}</span>'
+        if qty > 1 else ""
+    )
+
     return f"""
         <div class="card">
-            <div class="card-name">{c['name']}</div>
+            <div class="card-name">{c['name']}{qty_badge}</div>
             <div class="card-subtitle">{subtitle}</div>
             <div class="card-value-row">
                 <div class="card-value">{value_str}</div>

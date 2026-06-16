@@ -20,10 +20,10 @@ from pathlib import Path
 
 BOTTLES_CSV = Path("data/bottles.csv")
 
-# Canonical 16-column schema. Used only as a fallback if the file has no header
+# Canonical 17-column schema. Used only as a fallback if the file has no header
 # yet; normal writes reuse the order read from the existing header.
 FIELDNAMES = ["bottle_id", "name", "proof", "msrp", "acquisition_date",
-              "acquisition_price", "batch", "bottle_code",
+              "acquisition_price", "quantity", "batch", "bottle_code",
               "status", "removed_date", "sale_price", "removal_notes",
               "wooden_cork_url", "bbb_url",
               "barrel_tap_url", "keg_n_bottle_url"]

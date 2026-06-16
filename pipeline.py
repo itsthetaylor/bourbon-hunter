@@ -17,7 +17,7 @@ HISTORY_FIELDNAMES = [
     "wooden_cork_price", "bbb_price",
     "barrel_tap_price", "keg_n_bottle_price",
     "market_value", "sources_count",
-    "msrp", "acquisition_price",
+    "msrp", "acquisition_price", "quantity",
     "gain_loss_dollar", "gain_loss_pct"
 ]
 
@@ -198,6 +198,7 @@ def process_bottle(bottle, timestamp):
         "sources_count": len(prices),
         "msrp": f"{msrp:.2f}" if msrp else "",
         "acquisition_price": f"{paid:.2f}" if paid else "",
+        "quantity": bottle.get("quantity", "1"),
         "gain_loss_dollar": f"{delta_dollar:.2f}" if delta_dollar is not None else "",
         "gain_loss_pct": f"{delta_pct:.2f}" if delta_pct is not None else "",
     })
