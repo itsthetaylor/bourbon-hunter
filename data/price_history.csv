@@ -26,3 +26,14 @@ timestamp,bottle_id,name,wooden_cork_price,bbb_price,barrel_tap_price,keg_n_bott
 2026-06-11T23:57:18,colonel_eh_taylor_straight_rye_bottled_in_bond,Colonel E.H. Taylor Straight Rye Bottled in Bond,199.99,130.00,249.99,,193.33,3,,90.00,103.33,114.81
 2026-06-11T23:57:18,colonel_eh_taylor_single_barrel_bottled_in_bond,Colonel E.H. Taylor Single Barrel Bottled in Bond,199.99,130.00,249.99,,193.33,3,,90.00,103.33,114.81
 2026-06-11T23:57:18,colonel_eh_taylor_barrel_proof,Colonel E.H. Taylor Barrel Proof,299.99,400.00,399.99,349.99,362.49,4,,110.00,252.49,229.54
+2026-06-15T20:00:10,weller_single_barrel,Weller Single Barrel,399.99,280.00,599.99,449.99,432.49,4,,110.00,322.49,293.18
+2026-06-15T20:00:10,stagg_kentucky_straight_bourbon_whiskey,Stagg Kentucky Straight Bourbon Whiskey,199.99,170.00,299.99,,223.33,3,,99.00,124.33,125.58
+2026-06-15T20:00:10,blantons_single_barrel_japanese_export,Blanton's Single Barrel Japanese Export,229.99,220.00,199.99,259.99,227.49,4,,110.00,117.49,106.81
+2026-06-15T20:00:10,blantons_single_barrel_bourbon_121_8,Blanton's Single Barrel Bourbon,199.99,230.00,249.99,259.99,234.99,4,,90.00,144.99,161.10
+2026-06-15T20:00:10,blantons_gold_edition,Blanton's Gold Edition,214.99,220.00,299.99,229.99,241.24,4,,110.00,131.24,119.31
+2026-06-15T20:00:10,eagle_rare_10_year_single_barrel_select,Eagle Rare 10 Year Single Barrel Select,64.95,490.00,99.99,69.99,181.23,4,,110.00,71.23,64.76
+2026-06-15T20:00:10,little_book_chapter_5_the_invitation,"Little Book Chapter 5 ""The Invitation""",399.99,140.00,399.99,,313.33,3,,120.00,193.33,161.11
+2026-06-15T20:00:10,little_book_chapter_08_path_not_taken,Little Book Chapter 08: Path Not Taken,,,199.99,,199.99,1,,110.00,89.99,81.81
+2026-06-15T20:00:10,thomas_h_handy_sazerac_straight_rye_whiskey,Thomas H. Handy Sazerac Straight Rye Whiskey,499.99,,699.99,,599.99,2,,179.00,420.99,235.19
+2026-06-15T20:00:10,colonel_eh_taylor_straight_rye_bottled_in_bond,Colonel E.H. Taylor Straight Rye Bottled in Bond,199.99,130.00,249.99,,193.33,3,,90.00,103.33,114.81
+2026-06-15T20:00:10,colonel_eh_taylor_barrel_proof,Colonel E.H. Taylor Barrel Proof,299.99,400.00,399.99,349.99,362.49,4,,110.00,252.49,229.54
