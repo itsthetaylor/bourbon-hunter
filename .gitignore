@@ -19,6 +19,11 @@ data/photos_failed/
 # Debug HTML dumps from scraper testing
 *_dump.html
 
+# Local SQLite data store — rebuildable from data/*.csv.bak via migrate_to_sqlite.py.
+# Kept out of git this pass to avoid binary churn on every pipeline run. Revisit
+# once the .csv.bak fallbacks are removed and the DB becomes the sole source.
+data/bourbon.db
+
 # Junk: a captured `git diff` accidentally saved as a file named ".csv"
 # (root-anchored so it never matches data/*.csv)
 /.csv

@@ -1,5 +1,5 @@
 """
-Generate a static HTML dashboard from bottles.csv + price_history.csv.
+Generate a static HTML dashboard from the SQLite DB (data/bourbon.db).
 Output: docs/index.html (GitHub Pages serves from /docs)
 
 Value math:
@@ -11,28 +11,20 @@ Value math:
     data is not included — see pipeline.py for the reasoning and fast-follow hook.
 """
 
-import csv
 import os
 from pathlib import Path
 from collections import OrderedDict
 
 from dotenv import load_dotenv
 
+import db
+
 load_dotenv()
 
-BOTTLES_CSV = Path("data/bottles.csv")
-HISTORY_CSV = Path("data/price_history.csv")
 OUTPUT_DIR = Path("docs")
 OUTPUT_FILE = OUTPUT_DIR / "index.html"
 
 EDITOR_BASE = f"http://{os.getenv('FLASK_TAILSCALE_IP', '100.111.112.8')}:5001"
-
-
-def load_csv(path):
-    if not path.exists():
-        return []
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        return list(csv.DictReader(f))
 
 
 def build_active_card(bottle, snapshot):
@@ -80,8 +72,8 @@ def build_archive_card(bottle):
 def build_dashboard():
     OUTPUT_DIR.mkdir(exist_ok=True)
 
-    bottles = load_csv(BOTTLES_CSV)
-    history = load_csv(HISTORY_CSV)
+    bottles = db.get_all_bottles()
+    history = db.get_all_history()
 
     latest_by_bottle = {}
     for row in history:

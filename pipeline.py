@@ -1,33 +1,19 @@
-import csv
-import os
 import statistics
-import tempfile
 import requests
 from bs4 import BeautifulSoup
 import re
-from pathlib import Path
 from datetime import datetime
+
+import db
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-BOTTLES_CSV = Path("data/bottles.csv")
-HISTORY_CSV = Path("data/price_history.csv")
-
 # eBay sold-price scraping skipped: eBay actively blocks scrapers and reliable
 # extraction isn't solvable without a paid API. All market_value figures here
 # are asking-price based (retail + auction listings), not realized sale prices.
 # Hook for sold-price data: add an "ebay_sold_price" column here when solved.
-
-HISTORY_FIELDNAMES = [
-    "timestamp", "bottle_id", "name",
-    "wooden_cork_price", "bbb_price",
-    "barrel_tap_price", "keg_n_bottle_price",
-    "market_value", "sources_count",
-    "msrp", "paid",
-    "gain_loss_dollar", "gain_loss_pct",
-]
 
 
 def get_price_wooden_cork(url):
@@ -130,41 +116,6 @@ def get_price_keg_n_bottle(url):
     return float(matches[0].replace("$", "").replace(",", ""))
 
 
-def append_history_row(row):
-    """Append one row to price_history.csv atomically (crash-safe).
-
-    This file is the irreplaceable trend-chart foundation, so a plain "a"-mode
-    append is too risky — a crash or power loss mid-write could corrupt the whole
-    file. Instead: read the existing rows, add the new one, write a temp file in
-    the same directory, fsync, then os.replace() it over the original. os.replace
-    is atomic on the same filesystem, so a reader (Flask, build_dashboard) ever
-    only sees the complete old file or the complete new file, never a half-write.
-    Stays plain UTF-8 (no BOM); reads with utf-8-sig to tolerate a pre-existing BOM.
-    """
-    existing = []
-    if HISTORY_CSV.exists():
-        with open(HISTORY_CSV, newline="", encoding="utf-8-sig") as f:
-            existing = list(csv.DictReader(f))
-    existing.append(row)
-
-    HISTORY_CSV.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=str(HISTORY_CSV.parent), prefix=".history_", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(existing)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, HISTORY_CSV)
-    except BaseException:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-
-
 def process_bottle(bottle, timestamp):
     name = bottle["name"]
     proof = bottle.get("proof") or None
@@ -220,39 +171,31 @@ def process_bottle(bottle, timestamp):
     bt_price = sources[2][1]
     kb_price = sources[3][1]
 
-    append_history_row({
-        "timestamp": timestamp,
-        "bottle_id": bottle["bottle_id"],
-        "name": name,
-        "wooden_cork_price": f"{wc_price:.2f}" if wc_price else "",
-        "bbb_price": f"{bbb_price:.2f}" if bbb_price else "",
-        "barrel_tap_price": f"{bt_price:.2f}" if bt_price else "",
-        "keg_n_bottle_price": f"{kb_price:.2f}" if kb_price else "",
-        "market_value": f"{market_value:.2f}",
-        "sources_count": len(prices),
-        "msrp": f"{msrp:.2f}" if msrp else "",
-        "paid": f"{paid:.2f}" if paid else "",
-        "gain_loss_dollar": f"{delta_dollar:.2f}" if delta_dollar is not None else "",
-        "gain_loss_pct": f"{delta_pct:.2f}" if delta_pct is not None else "",
-    })
+    # Insert as native types — db wraps it in a single SQLite transaction
+    # (the engine's atomicity replaces the old temp-file + os.replace append).
+    db.append_price_history(
+        timestamp=timestamp,
+        bottle_id=bottle["bottle_id"],
+        wooden_cork_price=wc_price,
+        bbb_price=bbb_price,
+        barrel_tap_price=bt_price,
+        keg_n_bottle_price=kb_price,
+        market_value=market_value,
+        sources_count=len(prices),
+        msrp=msrp,
+        paid=paid,
+        gain_loss_dollar=delta_dollar,
+        gain_loss_pct=delta_pct,
+    )
 
     return {"market_value": market_value, "paid": paid}
 
 
 def main():
-    if not BOTTLES_CSV.exists():
-        print(f"ERROR: {BOTTLES_CSV} not found")
-        return
-
-    with open(BOTTLES_CSV, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        all_bottles = list(reader)
-
-    bottles = [b for b in all_bottles if (b.get("status") or "active") == "active"]
-    archived_count = len(all_bottles) - len(bottles)
+    bottles = db.get_active_bottles()
 
     timestamp = datetime.now().isoformat(timespec="seconds")
-    print(f"Loaded {len(bottles)} active bottles from {BOTTLES_CSV} ({archived_count} archived, skipped)")
+    print(f"Loaded {len(bottles)} active bottles from the database")
     print(f"Run timestamp: {timestamp}")
 
     total_value = 0
@@ -274,7 +217,7 @@ def main():
         pct = (delta / total_paid) * 100
         sign = "+" if delta >= 0 else ""
         print(f"  Total Gain/Loss:   {sign}${delta:,.2f}  ({sign}{pct:.1f}%)")
-        print(f"\nHistory logged to: {HISTORY_CSV}")
+        print("\nHistory logged to: data/bourbon.db (price_history)")
 
 
 if __name__ == "__main__":

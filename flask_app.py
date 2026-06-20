@@ -4,34 +4,25 @@ Bourbon Hunter — Phase 2 local editor (Flask).
 Mobile-first dark UI for editing the collection, served over Tailscale.
 
 DATA-SAFETY CONTRACT (do not break):
-  * This app writes ONLY to data/bottles.csv. It NEVER writes price_history.csv.
-  * Every bottles.csv write goes through archive_bottle.save_bottles() (atomic).
-  * Schema is read from the file header, never hardcoded here.
+  * This app writes ONLY to the `bottles` table. It NEVER writes `price_history`.
+  * Every bottle write goes through db.py, which wraps each change in a single
+    SQLite transaction (atomic — replaces the old temp-file + os.replace pattern).
+  * Schema lives in the DB; this file never hardcodes column lists.
 """
 
-import csv
 import logging
 import os
 import traceback
 from collections import OrderedDict
-from pathlib import Path
 
 from flask import Flask, request, redirect, url_for, render_template_string, abort, jsonify
 from dotenv import load_dotenv
 
+import db
 import pipeline
-from archive_bottle import (
-    BOTTLES_CSV,
-    VALID_STATUSES,
-    load_bottles,
-    save_bottles,
-    read_header,
-    archive_bottle,
-)
 
 load_dotenv()
 
-HISTORY_CSV    = Path("data/price_history.csv")
 # TAILSCALE_IP is DISPLAY-ONLY — the "open on your phone" hint and the editor_base
 # link in the template. Flask BINDS to BIND_HOST (0.0.0.0, all interfaces), so it
 # starts even when Tailscale hasn't assigned the IP yet (NoState). Reaching it over
@@ -71,22 +62,11 @@ SCRAPER_BY_KEY = {k: fn for k, _, fn in URL_FIELDS}
 # --------------------------------------------------------------------------- #
 
 def latest_market_values():
-    if not HISTORY_CSV.exists():
-        return {}
-    latest = {}
-    with open(HISTORY_CSV, newline="", encoding="utf-8-sig") as f:
-        for row in csv.DictReader(f):
-            bid = row.get("bottle_id")
-            if not bid:
-                continue
-            ts = row.get("timestamp", "")
-            if bid not in latest or ts > latest[bid].get("timestamp", ""):
-                latest[bid] = row
-    return latest
+    return db.latest_market_values()
 
 
 def active_bottles():
-    return [b for b in load_bottles() if (b.get("status") or "active") == "active"]
+    return db.get_active_bottles()
 
 
 def product_groups(bottles):
@@ -131,27 +111,25 @@ def index():
 @app.route("/edit/<bottle_id>", methods=["POST"])
 def edit(bottle_id):
     """Update paid and/or the 4 *_url fields for one bottle."""
-    fieldnames = read_header(BOTTLES_CSV)
-    bottles    = load_bottles()
-    target     = next((b for b in bottles if b.get("bottle_id") == bottle_id), None)
+    target = db.get_bottle(bottle_id)
     if target is None:
         abort(404)
 
+    fields = {}
     if "paid" in request.form:
         raw = request.form.get("paid", "").strip()
-        if raw == "":
-            target["paid"] = ""
-        else:
+        if raw != "":
             try:
-                target["paid"] = f"{float(raw):.2f}"
+                float(raw)
             except ValueError:
                 return _render_index(error=f"'{raw}' is not a valid price.", status_code=400)
+        fields["paid"] = raw  # db coerces "" -> NULL, number -> REAL
 
     for key in URL_KEYS:
         if key in request.form:
-            target[key] = request.form.get(key, "").strip()
+            fields[key] = request.form.get(key, "").strip()
 
-    save_bottles(bottles, fieldnames)
+    db.update_bottle_fields(bottle_id, fields)
     return redirect(url_for("index") + f"#{target.get('product_key') or bottle_id}")
 
 
@@ -160,7 +138,7 @@ def archive(bottle_id):
     status     = request.form.get("status", "").strip()
     sale_price = request.form.get("sale_price", "").strip() or None
     try:
-        archive_bottle(bottle_id, status, sale_price)
+        db.set_status(bottle_id, status, sale_price)
     except ValueError as e:
         return _render_index(error=str(e), status_code=400)
     return redirect(url_for("index"))
@@ -177,16 +155,18 @@ def urls():
 
 @app.route("/update_urls", methods=["POST"])
 def update_urls():
-    fieldnames = read_header(BOTTLES_CSV)
-    bottles    = load_bottles()
-    by_id      = {b.get("bottle_id"): b for b in bottles}
+    by_bottle = {}  # bottle_id -> {url_field: value}
     for form_key, value in request.form.items():
         if "__" not in form_key:
             continue
         bid, field = form_key.rsplit("__", 1)
-        if field in URL_KEYS and bid in by_id:
-            by_id[bid][field] = value.strip()
-    save_bottles(bottles, fieldnames)
+        if field in URL_KEYS:
+            by_bottle.setdefault(bid, {})[field] = value.strip()
+    for bid, fields in by_bottle.items():
+        try:
+            db.update_bottle_fields(bid, fields)
+        except ValueError:
+            pass  # unknown bottle_id — skip (mirrors the old membership check)
     return redirect(url_for("urls"))
 
 
@@ -429,7 +409,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   </div>
   {% endfor %}
 
-  <footer>Local editor &middot; writes only to bottles.csv &middot; price_history is read-only</footer>
+  <footer>Local editor &middot; writes only to the bottles table &middot; price history is read-only</footer>
 </div>
 
 <script>
