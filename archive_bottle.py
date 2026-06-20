@@ -20,15 +20,16 @@ from pathlib import Path
 
 BOTTLES_CSV = Path("data/bottles.csv")
 
-# Canonical 17-column schema. Used only as a fallback if the file has no header
+# Canonical 16-column schema. Used only as a fallback if the file has no header
 # yet; normal writes reuse the order read from the existing header.
-FIELDNAMES = ["bottle_id", "name", "proof", "msrp", "acquisition_date",
-              "acquisition_price", "quantity", "batch", "bottle_code",
-              "status", "removed_date", "sale_price", "removal_notes",
-              "wooden_cork_url", "bbb_url",
-              "barrel_tap_url", "keg_n_bottle_url"]
+FIELDNAMES = [
+    "bottle_id", "product_key", "name", "proof", "batch", "bottle_code",
+    "paid", "msrp", "status", "sale_price",
+    "date_acquired", "date_resolved",
+    "wooden_cork_url", "bbb_url", "barrel_tap_url", "keg_n_bottle_url",
+]
 
-VALID_STATUSES = ["sold", "drank", "given_away", "lost"]
+VALID_STATUSES = ["consumed", "sold"]
 
 
 def read_header(path=BOTTLES_CSV):
@@ -75,14 +76,13 @@ def save_bottles(bottles, fieldnames=None):
         raise
 
 
-def archive_bottle(bottle_id, status, sale_price=None, notes=None):
-    """Mark a bottle archived. Shared by the CLI and the Flask app.
+def archive_bottle(bottle_id, status, sale_price=None):
+    """Mark a bottle consumed or sold. Shared by the CLI and the Flask app.
 
-    status   one of VALID_STATUSES (sold / drank / given_away / lost)
-    sale_price  required when status == 'sold'; ignored otherwise
-    notes    optional free text
+    status     'consumed' or 'sold'
+    sale_price required when status == 'sold'; ignored otherwise
 
-    Stamps removed_date = today. Returns the updated bottle row dict.
+    Stamps date_resolved = today. Returns the updated bottle row dict.
     Raises ValueError on bad status, missing/invalid sale price, or unknown id.
     """
     status = (status or "").strip()
@@ -105,9 +105,8 @@ def archive_bottle(bottle_id, status, sale_price=None, notes=None):
         raise ValueError(f"no bottle with bottle_id {bottle_id!r}")
 
     target["status"] = status
-    target["removed_date"] = date.today().isoformat()
+    target["date_resolved"] = date.today().isoformat()
     target["sale_price"] = sale_price_str
-    target["removal_notes"] = (notes or "").strip()
 
     save_bottles(bottles, fieldnames)
     return target
@@ -170,17 +169,13 @@ def main():
             except ValueError:
                 print("  Enter a dollar amount.")
 
-    notes = input("Removal notes (optional, enter to skip): ").strip()
-
-    updated = archive_bottle(chosen["bottle_id"], new_status, sale_price, notes)
+    updated = archive_bottle(chosen["bottle_id"], new_status, sale_price)
 
     print()
     print(f"  Archived {updated['bottle_id']} as {updated['status']}")
-    print(f"  Removed date: {updated['removed_date']}")
+    print(f"  Resolved date: {updated['date_resolved']}")
     if updated["sale_price"]:
-        print(f"  Sale price:   ${updated['sale_price']}")
-    if updated["removal_notes"]:
-        print(f"  Notes:        {updated['removal_notes']}")
+        print(f"  Sale price:    ${updated['sale_price']}")
 
 
 if __name__ == "__main__":

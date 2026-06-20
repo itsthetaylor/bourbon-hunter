@@ -127,6 +127,16 @@ def slugify(text):
     return text.strip("_")
 
 
+def make_product_key(name, proof, batch):
+    """Stable display-grouping label: name+proof+batch slug. Not a FK."""
+    parts = [slugify(name)]
+    if proof:
+        parts.append(proof.replace(".", "_"))
+    if batch:
+        parts.append(slugify(batch))
+    return "_".join(p for p in parts if p)
+
+
 def mime_from_name(name):
     ext = os.path.splitext(name or "")[1].lower()
     return EXT_MIME.get(ext, "image/jpeg")
@@ -420,14 +430,14 @@ def add_bottle(bottle_data):
 
     new_row = {k: "" for k in fieldnames}
     new_row.update({
-        "bottle_id": bottle_id,
-        "name": name,
-        "proof": proof,
-        "msrp": _clean(bottle_data.get("msrp")),
-        "quantity": "1",
-        "batch": batch,
+        "bottle_id":   bottle_id,
+        "product_key": make_product_key(name, proof, batch),
+        "name":        name,
+        "proof":       proof,
+        "msrp":        _clean(bottle_data.get("msrp")),
+        "batch":       batch,
         "bottle_code": _clean(bottle_data.get("bottle_code")),
-        "status": "active",
+        "status":      "active",
     })
 
     bottles.append(new_row)
