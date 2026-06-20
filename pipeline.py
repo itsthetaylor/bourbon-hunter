@@ -1,5 +1,7 @@
 import csv
+import os
 import statistics
+import tempfile
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -129,12 +131,38 @@ def get_price_keg_n_bottle(url):
 
 
 def append_history_row(row):
-    file_exists = HISTORY_CSV.exists()
-    with open(HISTORY_CSV, "a", newline="", encoding="utf-8") as f:  # plain utf-8, no BOM
-        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES)
-        if not file_exists:
+    """Append one row to price_history.csv atomically (crash-safe).
+
+    This file is the irreplaceable trend-chart foundation, so a plain "a"-mode
+    append is too risky — a crash or power loss mid-write could corrupt the whole
+    file. Instead: read the existing rows, add the new one, write a temp file in
+    the same directory, fsync, then os.replace() it over the original. os.replace
+    is atomic on the same filesystem, so a reader (Flask, build_dashboard) ever
+    only sees the complete old file or the complete new file, never a half-write.
+    Stays plain UTF-8 (no BOM); reads with utf-8-sig to tolerate a pre-existing BOM.
+    """
+    existing = []
+    if HISTORY_CSV.exists():
+        with open(HISTORY_CSV, newline="", encoding="utf-8-sig") as f:
+            existing = list(csv.DictReader(f))
+    existing.append(row)
+
+    HISTORY_CSV.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(HISTORY_CSV.parent), prefix=".history_", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES, extrasaction="ignore")
             writer.writeheader()
-        writer.writerow(row)
+            writer.writerows(existing)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, HISTORY_CSV)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 
 def process_bottle(bottle, timestamp):

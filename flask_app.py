@@ -32,7 +32,12 @@ from archive_bottle import (
 load_dotenv()
 
 HISTORY_CSV    = Path("data/price_history.csv")
+# TAILSCALE_IP is DISPLAY-ONLY — the "open on your phone" hint and the editor_base
+# link in the template. Flask BINDS to BIND_HOST (0.0.0.0, all interfaces), so it
+# starts even when Tailscale hasn't assigned the IP yet (NoState). Reaching it over
+# Tailscale still uses this IP.
 TAILSCALE_IP   = os.getenv("FLASK_TAILSCALE_IP", "127.0.0.1")
+BIND_HOST      = "0.0.0.0"
 PORT           = 5001
 
 app = Flask(__name__)
@@ -497,5 +502,6 @@ if __name__ == "__main__":
     print("=" * 56)
     print("  Bourbon Hunter — Collection Editor")
     print(f"  Open on your phone:  http://{TAILSCALE_IP}:{PORT}")
+    print(f"  (binding 0.0.0.0:{PORT} — independent of Tailscale state)")
     print("=" * 56)
-    app.run(host=TAILSCALE_IP, port=PORT, debug=False)
+    app.run(host=BIND_HOST, port=PORT, debug=False)

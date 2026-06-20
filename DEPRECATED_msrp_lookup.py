@@ -1,3 +1,10 @@
+# ============================================================================
+# SUPERSEDED — contains incorrect MSRP values, do not run.
+#   The PROPOSED table below has WRONG values (e.g. weller_12_year $49.99 vs
+#   correct $59.99; both EHT entries $69.99 vs correct $79.99). MSRPs were set
+#   correctly BY HAND in bottles.csv. Running this with --apply would silently
+#   overwrite correct values with these bad numbers. Kept for reference only.
+# ============================================================================
 """
 msrp_lookup.py - populate the blank `msrp` column for active bottles.
 
