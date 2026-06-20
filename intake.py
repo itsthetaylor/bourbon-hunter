@@ -7,7 +7,7 @@ back / hand-written info). This script:
   2. clusters photos within 180s into one bottle (intake_core.cluster_photos),
   3. shows you the proposed grouping and waits for confirmation,
   4. sends each bottle's photos to ONE vision call, and
-  5. writes the bottle to bottles.csv (atomic).
+  5. writes the bottle to the SQLite DB (atomic, via db.insert_bottle).
 
 All identification/clustering/writing logic lives in intake_core.py so this and
 drive_intake.py stay identical in behavior.
@@ -89,7 +89,7 @@ def main():
         elif status == "no_name":
             print("  Model returned no name — skipped (not written)")
         else:
-            print(f"  Added to bottles.csv as: {bottle_id}")
+            print(f"  Added to the database as: {bottle_id}")
 
         _move_all(group, PHOTOS_PROCESSED)
         print(f"  Moved {len(group)} photo(s) to {PHOTOS_PROCESSED}")

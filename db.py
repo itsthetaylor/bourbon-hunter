@@ -119,6 +119,11 @@ def _to_money(v):
     return float(s)
 
 
+def _blank_to_none(v):
+    """Text value -> itself, or None for blank/whitespace-only (stores NULL)."""
+    return v if (v is not None and str(v).strip() != "") else None
+
+
 # --------------------------------------------------------------------------- #
 # Reads (return CSV-shaped dicts; order preserved by insertion rowid/id)
 # --------------------------------------------------------------------------- #
@@ -152,6 +157,16 @@ def get_bottle(bottle_id):
     finally:
         conn.close()
     return _bottle_dict(r) if r else None
+
+
+def get_bottle_ids():
+    """Set of all existing bottle_ids — used by intake for slug-collision checks."""
+    conn = connect()
+    try:
+        rows = conn.execute("SELECT bottle_id FROM bottles").fetchall()
+    finally:
+        conn.close()
+    return {r["bottle_id"] for r in rows}
 
 
 def get_all_history():
@@ -233,6 +248,58 @@ def update_bottle_fields(bottle_id, fields):
             raise ValueError(f"no bottle with bottle_id {bottle_id!r}")
     finally:
         conn.close()
+
+
+def insert_bottle(*, bottle_id, name, product_key=None, proof=None, batch=None,
+                  bottle_code=None, paid=None, msrp=None, status="active",
+                  sale_price=None, date_acquired=None, date_resolved=None,
+                  wooden_cork_url=None, bbb_url=None, barrel_tap_url=None,
+                  keg_n_bottle_url=None):
+    """Insert a brand-new bottle — the photo-intake write path.
+
+    Money columns (paid, msrp, sale_price) coerce to REAL/NULL; blank text -> NULL.
+    A single INSERT is atomic (the transaction replaces the old CSV temp-file +
+    os.replace write). Returns the inserted bottle (CSV-shaped). Raises ValueError
+    on a missing name, a duplicate bottle_id, a bad status, or a bad money value.
+    """
+    if not bottle_id:
+        raise ValueError("bottle_id is required")
+    if not name or str(name).strip() == "":
+        raise ValueError("name is required")
+
+    row = {
+        "bottle_id":        bottle_id,
+        "product_key":      _blank_to_none(product_key),
+        "name":             name,
+        "proof":            _blank_to_none(proof),
+        "batch":            _blank_to_none(batch),
+        "bottle_code":      _blank_to_none(bottle_code),
+        "paid":             _to_money(paid),
+        "msrp":             _to_money(msrp),
+        "status":           status,
+        "sale_price":       _to_money(sale_price),
+        "date_acquired":    _blank_to_none(date_acquired),
+        "date_resolved":    _blank_to_none(date_resolved),
+        "wooden_cork_url":  _blank_to_none(wooden_cork_url),
+        "bbb_url":          _blank_to_none(bbb_url),
+        "barrel_tap_url":   _blank_to_none(barrel_tap_url),
+        "keg_n_bottle_url": _blank_to_none(keg_n_bottle_url),
+    }
+    cols = list(row.keys())
+    conn = connect()
+    try:
+        conn.execute(
+            f"INSERT INTO bottles ({', '.join(cols)}) "
+            f"VALUES ({', '.join('?' * len(cols))})",
+            [row[c] for c in cols],
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        # duplicate PK or CHECK(status) violation
+        raise ValueError(f"could not insert bottle {bottle_id!r}: {e}")
+    finally:
+        conn.close()
+    return get_bottle(bottle_id)
 
 
 def set_status(bottle_id, status, sale_price=None):

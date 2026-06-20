@@ -38,7 +38,11 @@ USAGE
 import argparse
 import sys
 
-from archive_bottle import BOTTLES_CSV, load_bottles, read_header, save_bottles
+# NOTE: this file is inert. It used to import BOTTLES_CSV, load_bottles,
+# read_header, and save_bottles from archive_bottle.py — but those CSV helpers
+# were removed in the SQLite migration (archive_bottle is now DB-backed). The
+# import is dropped so the module loads cleanly instead of ImportError-ing; the
+# script is not meant to run (see the "SUPERSEDED — do not run" banner above).
 
 # bottle_id -> (proposed_msrp | None, source, note)
 #   proposed_msrp is None when the bottle has no official US MSRP (export-only);

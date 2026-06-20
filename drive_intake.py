@@ -8,7 +8,8 @@ then uses the SAME shared logic as the local path (intake_core):
   2. cluster photos within 180s into one bottle,
   3. show the proposed grouping and wait for confirmation,
   4. send each bottle's photos to ONE vision call,
-  5. write to bottles.csv (atomic) and move that bottle's photos to processed/failed.
+  5. write to the SQLite DB (atomic, via db.insert_bottle) and move that bottle's
+     photos to processed/failed.
 """
 
 import io
@@ -202,7 +203,7 @@ def main():
         elif status == "no_name":
             print("  Model returned no name — skipped (not written)")
         else:
-            print(f"  Added to bottles.csv as: {bottle_id}")
+            print(f"  Added to the database as: {bottle_id}")
 
         for p in group:
             move_file(service, p["file_id"], folders["processed"])

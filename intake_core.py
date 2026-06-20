@@ -8,7 +8,7 @@ module is the single source of truth for:
   * the vision prompt
   * EXIF capture-time reading (JPEG + HEIC) and 180-second clustering into bottles
   * the multi-image vision call (all photos of one bottle in a single request)
-  * response parsing + atomic add_bottle() (reuses archive_bottle.save_bottles)
+  * response parsing + atomic add_bottle() (writes to the DB via db.insert_bottle)
 
 Keeping it in one place means the local and Drive paths can never drift apart.
 """
@@ -41,12 +41,7 @@ load_dotenv(override=True)
 
 from anthropic import Anthropic
 
-from archive_bottle import (
-    BOTTLES_CSV,
-    read_header,
-    load_bottles,
-    save_bottles,
-)
+import db
 
 pillow_heif.register_heif_opener()  # lets Pillow open .heic/.heif (iPhone photos)
 
@@ -365,7 +360,7 @@ def print_result(result):
 
 
 # --------------------------------------------------------------------------- #
-# Write (atomic, via archive_bottle.save_bottles)
+# Write (atomic, via db.insert_bottle — single SQLite transaction)
 # --------------------------------------------------------------------------- #
 
 def _resolve_slug(base_slug, proof, batch, existing_ids):
@@ -409,37 +404,31 @@ def _resolve_slug(base_slug, proof, batch, existing_ids):
 
 
 def add_bottle(bottle_data):
-    """Append one identified bottle to bottles.csv (atomic).
+    """Insert one identified bottle into the DB (atomic, via db.insert_bottle).
 
     Returns (bottle_id, status) where status is 'added' or 'no_name'.
-    Slug collisions are resolved by _resolve_slug — a discriminator (proof,
-    batch, or UUID fragment) is appended only when the base name slug already
-    exists, so unique bottles keep clean ids.
+    Slug collisions are resolved by _resolve_slug against the DB's existing ids —
+    a discriminator (proof, batch, or UUID fragment) is appended only when the
+    base name slug already exists, so unique bottles keep clean ids.
     """
     name = (bottle_data.get("name") or "").strip()
     if not name:
         return None, "no_name"
 
-    fieldnames = read_header(BOTTLES_CSV)
-    bottles = load_bottles()
-    existing_ids = {b.get("bottle_id") for b in bottles}
+    existing_ids = db.get_bottle_ids()
 
     proof = _clean(bottle_data.get("proof"))
     batch = _clean(bottle_data.get("batch"))
     bottle_id = _resolve_slug(slugify(name), proof, batch, existing_ids)
 
-    new_row = {k: "" for k in fieldnames}
-    new_row.update({
-        "bottle_id":   bottle_id,
-        "product_key": make_product_key(name, proof, batch),
-        "name":        name,
-        "proof":       proof,
-        "msrp":        _clean(bottle_data.get("msrp")),
-        "batch":       batch,
-        "bottle_code": _clean(bottle_data.get("bottle_code")),
-        "status":      "active",
-    })
-
-    bottles.append(new_row)
-    save_bottles(bottles, fieldnames)
+    db.insert_bottle(
+        bottle_id=bottle_id,
+        product_key=make_product_key(name, proof, batch),
+        name=name,
+        proof=proof,
+        batch=batch,
+        bottle_code=_clean(bottle_data.get("bottle_code")),
+        msrp=_clean(bottle_data.get("msrp")),
+        status="active",
+    )
     return bottle_id, "added"

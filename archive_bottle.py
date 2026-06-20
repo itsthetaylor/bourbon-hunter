@@ -1,120 +1,38 @@
 """
-Archive a bottle (sold / drank / given_away / lost).
+Archive a bottle (consumed / sold).
 
 Two ways in, ONE code path:
-  * archive_bottle(bottle_id, status, sale_price, notes)  ← importable core.
-    The Flask app (Phase 2) calls this directly — no shelling out to the
-    interactive prompts below (that would hang waiting on stdin).
-  * `python archive_bottle.py`  ← the original interactive CLI, now a thin
-    wrapper that gathers input and calls archive_bottle().
+  * archive_bottle(bottle_id, status, sale_price)  ← importable core. Delegates to
+    db.set_status(). (The Flask app calls db.set_status() directly; this wrapper
+    stays for the CLI below and any other importer.)
+  * `python archive_bottle.py`  ← interactive CLI: lists the active bottles from
+    the DB, asks status + sale price, and writes through db.set_status().
 
-All writes to bottles.csv are atomic (temp file + os.replace) and preserve the
-exact column order found in the file's header.
+All reads/writes go through db.py (SQLite at data/bourbon.db). Nothing here
+touches bottles.csv anymore — that file lives only as data/bottles.csv.bak.
 """
 
-import csv
-import os
-import tempfile
-from datetime import date
-from pathlib import Path
+import db
 
-BOTTLES_CSV = Path("data/bottles.csv")
-
-# Canonical 16-column schema. Used only as a fallback if the file has no header
-# yet; normal writes reuse the order read from the existing header.
-FIELDNAMES = [
-    "bottle_id", "product_key", "name", "proof", "batch", "bottle_code",
-    "paid", "msrp", "status", "sale_price",
-    "date_acquired", "date_resolved",
-    "wooden_cork_url", "bbb_url", "barrel_tap_url", "keg_n_bottle_url",
-]
-
-VALID_STATUSES = ["consumed", "sold"]
-
-
-def read_header(path=BOTTLES_CSV):
-    """Return the column order from the CSV header, or FIELDNAMES if absent."""
-    path = Path(path)
-    if not path.exists():
-        return list(FIELDNAMES)
-    with open(path, newline="", encoding="utf-8") as f:
-        header = next(csv.reader(f), None)
-    return header if header else list(FIELDNAMES)
-
-
-def load_bottles():
-    if not BOTTLES_CSV.exists():
-        return []
-    with open(BOTTLES_CSV, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
-
-
-def save_bottles(bottles, fieldnames=None):
-    """Atomically rewrite bottles.csv.
-
-    Writes a temp file in the same directory, fsyncs, then os.replace()s it over
-    the original so a crash or a concurrent run_all.py can never observe a
-    half-written file. Column order comes from the existing header.
-    """
-    if fieldnames is None:
-        fieldnames = read_header(BOTTLES_CSV)
-    BOTTLES_CSV.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=str(BOTTLES_CSV.parent), prefix=".bottles_", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(bottles)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, BOTTLES_CSV)
-    except BaseException:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
+# Archivable target states. The DB CHECK also allows 'active', but from here you
+# only ever transition INTO these two. Kept as a module constant for any importer.
+VALID_STATUSES = list(db.ARCHIVE_STATUSES)
 
 
 def archive_bottle(bottle_id, status, sale_price=None):
-    """Mark a bottle consumed or sold. Shared by the CLI and the Flask app.
+    """Mark a bottle consumed or sold (delegates to db.set_status).
 
     status     'consumed' or 'sold'
     sale_price required when status == 'sold'; ignored otherwise
 
-    Stamps date_resolved = today. Returns the updated bottle row dict.
+    Stamps date_resolved = today (in db). Returns the updated bottle dict.
     Raises ValueError on bad status, missing/invalid sale price, or unknown id.
     """
-    status = (status or "").strip()
-    if status not in VALID_STATUSES:
-        raise ValueError(f"status must be one of {VALID_STATUSES}, got {status!r}")
-
-    sale_price_str = ""
-    if status == "sold":
-        if sale_price is None or str(sale_price).strip() == "":
-            raise ValueError("sale_price is required when status is 'sold'")
-        try:
-            sale_price_str = f"{float(sale_price):.2f}"
-        except (TypeError, ValueError):
-            raise ValueError(f"sale_price must be a number, got {sale_price!r}")
-
-    fieldnames = read_header(BOTTLES_CSV)
-    bottles = load_bottles()
-    target = next((b for b in bottles if b.get("bottle_id") == bottle_id), None)
-    if target is None:
-        raise ValueError(f"no bottle with bottle_id {bottle_id!r}")
-
-    target["status"] = status
-    target["date_resolved"] = date.today().isoformat()
-    target["sale_price"] = sale_price_str
-
-    save_bottles(bottles, fieldnames)
-    return target
+    return db.set_status(bottle_id, status, sale_price)
 
 
 # --------------------------------------------------------------------------- #
-# Interactive CLI (unchanged behavior) — now just collects input and delegates
-# to archive_bottle() above.
+# Interactive CLI — collects input and delegates to archive_bottle() / db.
 # --------------------------------------------------------------------------- #
 
 def prompt_choice(prompt, options):
@@ -136,12 +54,7 @@ def prompt_choice(prompt, options):
 
 
 def main():
-    bottles = load_bottles()
-    if not bottles:
-        print(f"No bottles found in {BOTTLES_CSV}")
-        return
-
-    active = [b for b in bottles if (b.get("status") or "active") == "active"]
+    active = db.get_active_bottles()
     if not active:
         print("No active bottles to archive.")
         return
