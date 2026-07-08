@@ -1,29 +1,91 @@
 """
-db.py — single access point for the SQLite data layer (data/bourbon.db).
+db.py — single access point for the data layer.
 
-Every other module (flask_app, pipeline, build_dashboard) imports from here
-instead of opening the DB or a CSV raw. This is the storage-layer replacement
-for the old bottles.csv / price_history.csv pair.
+BACKEND: PostgreSQL (Week 1 multi-user foundation). The connection string comes
+ONLY from the DATABASE_URL environment variable (loaded from .env) — it contains
+a password and must never be hardcoded or committed. See .env.example.
+
+The previous SQLite file (data/bourbon.db) is kept as a fallback until Postgres
+is proven over several runs; migrate_sqlite_to_pg.py loads it into Postgres.
 
 COMPATIBILITY CONTRACT (why reads return strings):
-  The migration is "storage only" — templates and pricing math downstream were
-  written against CSV rows, where every value is a string and blanks are "".
-  So the read helpers here return rows shaped EXACTLY like the old csv.DictReader
-  output: all values are strings, SQL NULL becomes "", and REAL money columns are
-  formatted "%.2f". Downstream code is therefore unchanged. Storage is typed
-  (REAL/INTEGER/NULL); only the presentation back to old consumers is stringified.
+  Templates and pricing math downstream were written against CSV rows, where every
+  value is a string and blanks are "". So the read helpers here return rows shaped
+  EXACTLY like the old csv.DictReader output: all values are strings, SQL NULL
+  becomes "", and money columns are formatted "%.2f". Downstream code is unchanged.
+  Storage is typed (DOUBLE PRECISION / INTEGER / NULL); only the presentation back
+  to old consumers is stringified.
 
 ATOMICITY:
-  Writes go through a single SQLite transaction (conn.commit()). That replaces the
-  old temp-file + os.replace() atomic-write pattern the CSV writers used — SQLite
-  gives the same all-or-nothing guarantee at the engine level, so a crash mid-write
-  leaves the DB consistent, never half-written.
+  Each write is a single Postgres transaction (commit()/implicit rollback on error)
+  — the engine guarantees all-or-nothing, replacing the old temp-file + os.replace
+  pattern the CSV layer used.
+
+ORDERING NOTE:
+  SQLite had an implicit rowid we ordered bottles by (original acquisition order).
+  Postgres has no rowid, so bottles carry an explicit `seq SERIAL` surrogate that
+  preserves that order: the migration seeds it from SQLite's rowid order, and new
+  intake rows auto-increment onto the end. Reads ORDER BY seq. `seq` is internal
+  ordering only — it is not exposed in the CSV-shaped dicts returned to consumers.
 """
 
-import sqlite3
+import os
 from datetime import date
 
-from migrate_to_sqlite import DB_PATH, SCHEMA_SQL
+import psycopg2
+import psycopg2.extras
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Copy .env.example to .env and set the Postgres "
+        "connection string (it holds the DB password; never hardcode it)."
+    )
+
+# Postgres schema — matches the SQLite schema exactly: same columns, TEXT for text,
+# DOUBLE PRECISION for the money/float columns (bit-identical to SQLite's REAL, so
+# values don't drift), INTEGER for the count, SERIAL for the auto-increment id, the
+# status CHECK constraint, and the price_history.bottle_id -> bottles FK.
+PG_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS bottles (
+    bottle_id        TEXT PRIMARY KEY,
+    seq              SERIAL,
+    product_key      TEXT,
+    name             TEXT,
+    proof            TEXT,
+    batch            TEXT,
+    bottle_code      TEXT,
+    paid             DOUBLE PRECISION,
+    msrp             DOUBLE PRECISION,
+    status           TEXT CHECK (status IN ('active','consumed','sold')),
+    sale_price       DOUBLE PRECISION,
+    date_acquired    TEXT,
+    date_resolved    TEXT,
+    wooden_cork_url  TEXT,
+    bbb_url          TEXT,
+    barrel_tap_url   TEXT,
+    keg_n_bottle_url TEXT
+);
+
+CREATE TABLE IF NOT EXISTS price_history (
+    id                 SERIAL PRIMARY KEY,
+    "timestamp"        TEXT,
+    bottle_id          TEXT REFERENCES bottles(bottle_id),
+    wooden_cork_price  DOUBLE PRECISION,
+    bbb_price          DOUBLE PRECISION,
+    barrel_tap_price   DOUBLE PRECISION,
+    keg_n_bottle_price DOUBLE PRECISION,
+    market_value       DOUBLE PRECISION,
+    sources_count      INTEGER,
+    msrp               DOUBLE PRECISION,
+    paid               DOUBLE PRECISION,
+    gain_loss_dollar   DOUBLE PRECISION,
+    gain_loss_pct      DOUBLE PRECISION
+);
+"""
 
 # Targets the Flask archive buttons may set. The DB CHECK also allows 'active',
 # but you only ever transition INTO these two from the UI.
@@ -41,18 +103,19 @@ _UPDATABLE = _MONEY_COLS | {
 # --------------------------------------------------------------------------- #
 
 def connect():
-    """Open a connection with row access by name and foreign keys enforced."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    """Open a Postgres connection whose cursors yield dict-like rows.
+
+    Foreign keys are enforced natively by Postgres (no PRAGMA needed).
+    """
+    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def init_db():
     """Create the tables if they don't exist (idempotent; loads no data)."""
     conn = connect()
     try:
-        conn.executescript(SCHEMA_SQL)
+        with conn.cursor() as cur:
+            cur.execute(PG_SCHEMA_SQL)
         conn.commit()
     finally:
         conn.close()
@@ -63,7 +126,7 @@ def init_db():
 # --------------------------------------------------------------------------- #
 
 def _money(v):
-    """REAL -> '%.2f' string; NULL -> '' (matches the old CSV cells)."""
+    """number -> '%.2f' string; NULL -> '' (matches the old CSV cells)."""
     return f"{v:.2f}" if v is not None else ""
 
 
@@ -125,13 +188,15 @@ def _blank_to_none(v):
 
 
 # --------------------------------------------------------------------------- #
-# Reads (return CSV-shaped dicts; order preserved by insertion rowid/id)
+# Reads (return CSV-shaped dicts)
 # --------------------------------------------------------------------------- #
 
 def get_all_bottles():
     conn = connect()
     try:
-        rows = conn.execute("SELECT * FROM bottles ORDER BY rowid").fetchall()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM bottles ORDER BY seq")
+            rows = cur.fetchall()
     finally:
         conn.close()
     return [_bottle_dict(r) for r in rows]
@@ -140,9 +205,9 @@ def get_all_bottles():
 def get_active_bottles():
     conn = connect()
     try:
-        rows = conn.execute(
-            "SELECT * FROM bottles WHERE status='active' ORDER BY rowid"
-        ).fetchall()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM bottles WHERE status='active' ORDER BY seq")
+            rows = cur.fetchall()
     finally:
         conn.close()
     return [_bottle_dict(r) for r in rows]
@@ -151,9 +216,9 @@ def get_active_bottles():
 def get_bottle(bottle_id):
     conn = connect()
     try:
-        r = conn.execute(
-            "SELECT * FROM bottles WHERE bottle_id=?", (bottle_id,)
-        ).fetchone()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM bottles WHERE bottle_id=%s", (bottle_id,))
+            r = cur.fetchone()
     finally:
         conn.close()
     return _bottle_dict(r) if r else None
@@ -163,7 +228,9 @@ def get_bottle_ids():
     """Set of all existing bottle_ids — used by intake for slug-collision checks."""
     conn = connect()
     try:
-        rows = conn.execute("SELECT bottle_id FROM bottles").fetchall()
+        with conn.cursor() as cur:
+            cur.execute("SELECT bottle_id FROM bottles")
+            rows = cur.fetchall()
     finally:
         conn.close()
     return {r["bottle_id"] for r in rows}
@@ -172,7 +239,9 @@ def get_bottle_ids():
 def get_all_history():
     conn = connect()
     try:
-        rows = conn.execute("SELECT * FROM price_history ORDER BY id").fetchall()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM price_history ORDER BY id")
+            rows = cur.fetchall()
     finally:
         conn.close()
     return [_history_dict(r) for r in rows]
@@ -191,7 +260,7 @@ def latest_market_values():
 
 
 # --------------------------------------------------------------------------- #
-# Writes (single transaction each = atomic, replacing temp-file+os.replace)
+# Writes (single transaction each = atomic)
 # --------------------------------------------------------------------------- #
 
 def append_price_history(*, timestamp, bottle_id,
@@ -203,49 +272,18 @@ def append_price_history(*, timestamp, bottle_id,
     """Insert one price snapshot. Values are native types (float/int/None)."""
     conn = connect()
     try:
-        conn.execute(
-            "INSERT INTO price_history ("
-            "timestamp, bottle_id, wooden_cork_price, bbb_price, barrel_tap_price, "
-            "keg_n_bottle_price, market_value, sources_count, msrp, paid, "
-            "gain_loss_dollar, gain_loss_pct) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (timestamp, bottle_id, wooden_cork_price, bbb_price, barrel_tap_price,
-             keg_n_bottle_price, market_value, sources_count, msrp, paid,
-             gain_loss_dollar, gain_loss_pct),
-        )
+        with conn.cursor() as cur:
+            cur.execute(
+                'INSERT INTO price_history ('
+                '"timestamp", bottle_id, wooden_cork_price, bbb_price, barrel_tap_price, '
+                'keg_n_bottle_price, market_value, sources_count, msrp, paid, '
+                'gain_loss_dollar, gain_loss_pct) '
+                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                (timestamp, bottle_id, wooden_cork_price, bbb_price, barrel_tap_price,
+                 keg_n_bottle_price, market_value, sources_count, msrp, paid,
+                 gain_loss_dollar, gain_loss_pct),
+            )
         conn.commit()
-    finally:
-        conn.close()
-
-
-def update_bottle_fields(bottle_id, fields):
-    """Update arbitrary editable columns for one bottle (the Flask Edit pane).
-
-    `fields` maps column -> raw value (form string ok). Money columns are coerced
-    to float/None; text/url columns store None for blank. Raises ValueError on an
-    unknown column, a bad money value, or an unknown bottle_id.
-    """
-    sets, vals = [], []
-    for col, v in fields.items():
-        if col not in _UPDATABLE:
-            raise ValueError(f"field {col!r} is not updatable")
-        if col in _MONEY_COLS:
-            v = _to_money(v)
-        else:
-            v = v if (v is not None and str(v).strip() != "") else None
-        sets.append(f"{col}=?")
-        vals.append(v)
-    if not sets:
-        return
-    vals.append(bottle_id)
-    conn = connect()
-    try:
-        cur = conn.execute(
-            f"UPDATE bottles SET {', '.join(sets)} WHERE bottle_id=?", vals
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            raise ValueError(f"no bottle with bottle_id {bottle_id!r}")
     finally:
         conn.close()
 
@@ -257,10 +295,10 @@ def insert_bottle(*, bottle_id, name, product_key=None, proof=None, batch=None,
                   keg_n_bottle_url=None):
     """Insert a brand-new bottle — the photo-intake write path.
 
-    Money columns (paid, msrp, sale_price) coerce to REAL/NULL; blank text -> NULL.
-    A single INSERT is atomic (the transaction replaces the old CSV temp-file +
-    os.replace write). Returns the inserted bottle (CSV-shaped). Raises ValueError
-    on a missing name, a duplicate bottle_id, a bad status, or a bad money value.
+    Money columns (paid, msrp, sale_price) coerce to float/NULL; blank text -> NULL.
+    Single INSERT (atomic). Returns the inserted bottle (CSV-shaped). Raises
+    ValueError on a missing name, a duplicate bottle_id, a bad status, or a bad
+    money value.
     """
     if not bottle_id:
         raise ValueError("bottle_id is required")
@@ -288,18 +326,53 @@ def insert_bottle(*, bottle_id, name, product_key=None, proof=None, batch=None,
     cols = list(row.keys())
     conn = connect()
     try:
-        conn.execute(
-            f"INSERT INTO bottles ({', '.join(cols)}) "
-            f"VALUES ({', '.join('?' * len(cols))})",
-            [row[c] for c in cols],
-        )
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO bottles ({', '.join(cols)}) "
+                f"VALUES ({', '.join(['%s'] * len(cols))})",
+                [row[c] for c in cols],
+            )
         conn.commit()
-    except sqlite3.IntegrityError as e:
+    except psycopg2.IntegrityError as e:
         # duplicate PK or CHECK(status) violation
         raise ValueError(f"could not insert bottle {bottle_id!r}: {e}")
     finally:
         conn.close()
     return get_bottle(bottle_id)
+
+
+def update_bottle_fields(bottle_id, fields):
+    """Update arbitrary editable columns for one bottle (the Flask Edit pane).
+
+    `fields` maps column -> raw value (form string ok). Money columns are coerced
+    to float/None; text/url columns store None for blank. Raises ValueError on an
+    unknown column, a bad money value, or an unknown bottle_id.
+    """
+    sets, vals = [], []
+    for col, v in fields.items():
+        if col not in _UPDATABLE:
+            raise ValueError(f"field {col!r} is not updatable")
+        if col in _MONEY_COLS:
+            v = _to_money(v)
+        else:
+            v = v if (v is not None and str(v).strip() != "") else None
+        sets.append(f"{col}=%s")
+        vals.append(v)
+    if not sets:
+        return
+    vals.append(bottle_id)
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE bottles SET {', '.join(sets)} WHERE bottle_id=%s", vals
+            )
+            affected = cur.rowcount
+        conn.commit()
+        if affected == 0:
+            raise ValueError(f"no bottle with bottle_id {bottle_id!r}")
+    finally:
+        conn.close()
 
 
 def set_status(bottle_id, status, sale_price=None):
@@ -323,12 +396,15 @@ def set_status(bottle_id, status, sale_price=None):
 
     conn = connect()
     try:
-        cur = conn.execute(
-            "UPDATE bottles SET status=?, date_resolved=?, sale_price=? WHERE bottle_id=?",
-            (status, date.today().isoformat(), sale, bottle_id),
-        )
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE bottles SET status=%s, date_resolved=%s, sale_price=%s "
+                "WHERE bottle_id=%s",
+                (status, date.today().isoformat(), sale, bottle_id),
+            )
+            affected = cur.rowcount
         conn.commit()
-        if cur.rowcount == 0:
+        if affected == 0:
             raise ValueError(f"no bottle with bottle_id {bottle_id!r}")
     finally:
         conn.close()
