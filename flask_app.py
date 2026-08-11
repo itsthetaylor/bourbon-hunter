@@ -18,6 +18,7 @@ from collections import OrderedDict
 from flask import Flask, request, redirect, url_for, render_template_string, abort, jsonify
 from dotenv import load_dotenv
 
+import brands
 import db
 import pipeline
 
@@ -78,12 +79,19 @@ def product_groups(bottles):
     return list(groups.values())
 
 
+def brand_groups(bottles):
+    """DISPLAY-ONLY brand grouping for the editor list. Buckets the product-key
+    groups by derived brand and sorts them — shared with the dashboard via the
+    brands module so the two views match exactly."""
+    return brands.brand_sections(product_groups(bottles))
+
+
 def _render_index(error=None, status_code=200):
     try:
         bottles = active_bottles()
         html = render_template_string(
             INDEX_TEMPLATE,
-            product_groups=product_groups(bottles),
+            brand_groups=brand_groups(bottles),
             market=latest_market_values(),
             url_labels=URL_LABELS,
             editor_base=f"http://{TAILSCALE_IP}:{PORT}",
@@ -219,6 +227,19 @@ h1 {
 .empty { text-align: center; color: #a08770; font-style: italic; font-size: 15px;
   padding: 48px 20px; border: 1px dashed rgba(160,135,112,.35);
   border-radius: 14px; margin-top: 20px; }
+.brand-header {
+  display: flex; align-items: baseline; gap: 8px;
+  font-family: Georgia, serif; font-size: 15px; font-weight: 700;
+  color: #d4a574; letter-spacing: .5px; text-transform: uppercase;
+  margin: 24px 2px 10px; padding-bottom: 6px;
+  border-bottom: 1px solid rgba(212,165,116,.18);
+}
+.brand-header:first-of-type { margin-top: 6px; }
+.brand-count {
+  font-size: 11px; font-weight: 700; color: #a08770;
+  background: rgba(212,165,116,.12); border: 1px solid rgba(212,165,116,.28);
+  border-radius: 5px; padding: 1px 7px; letter-spacing: 0;
+}
 .card {
   background: linear-gradient(135deg, rgba(30,18,10,.92), rgba(45,26,14,.88));
   border: 1px solid rgba(212,165,116,.18); border-radius: 14px;
@@ -345,13 +366,15 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 
   {% if error %}<div class="banner">{{ error }}</div>{% endif %}
 
-  {% if not product_groups %}
+  {% if not brand_groups %}
     <div class="empty">No active bottles yet.<br>Add via photo intake, then edit here.</div>
   {% endif %}
 
 """ + _ACTION_MACRO + """
 
-  {% for grp in product_groups %}
+  {% for section in brand_groups %}
+  <div class="brand-header">{{ section.brand }} <span class="brand-count">{{ section.groups|length }}</span></div>
+  {% for grp in section.groups %}
   {% set b0 = grp[0] %}
   {% set count = grp|length %}
   {% set snap = market.get(b0.bottle_id) %}
@@ -407,6 +430,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
       </details>
     {% endif %}
   </div>
+  {% endfor %}
   {% endfor %}
 
   <footer>Local editor &middot; writes only to the bottles table &middot; price history is read-only</footer>

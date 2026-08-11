@@ -1,6 +1,9 @@
 """
-Generate a static HTML dashboard from the SQLite DB (data/bourbon.db).
+Generate a static HTML dashboard from Postgres (DATABASE_URL, via db.py).
 Output: docs/index.html (GitHub Pages serves from /docs)
+
+Active bottles are grouped by derived brand (A->Z) using the shared brands module
+— the same grouping and alias map the Flask editor uses, so the two views match.
 
 Value math:
   - Per-bottle market estimate = median of available asking prices (outlier-resistant).
@@ -17,6 +20,7 @@ from collections import OrderedDict
 
 from dotenv import load_dotenv
 
+import brands
 import db
 
 load_dotenv()
@@ -103,12 +107,14 @@ def build_dashboard():
                 archive_realized_gain += card["realized_gain"]
             archive_cards.append(card)
 
-    # Group active cards by product_key for display (order preserved)
+    # Group active cards by product_key, then bucket those into brand sections
+    # (A->Z) via the shared brands module — identical to the Flask editor.
     groups_map = OrderedDict()
     for card in active_cards:
         pk = card["product_key"]
         groups_map.setdefault(pk, []).append(card)
-    active_groups = list(groups_map.values())
+    active_sections = brands.brand_sections(list(groups_map.values()))
+    active_group_count = sum(len(s["groups"]) for s in active_sections)
 
     total_gain     = total_value - total_paid if total_paid else 0
     total_gain_pct = (total_gain / total_paid * 100) if total_paid else 0
@@ -118,7 +124,7 @@ def build_dashboard():
     )
 
     html = render_html(
-        active_groups, archive_cards,
+        active_sections, archive_cards,
         total_paid, total_value, total_gain, total_gain_pct,
         archive_realized_gain, last_run,
         len(active_cards),
@@ -128,7 +134,8 @@ def build_dashboard():
         f.write(html)
 
     print(f"Dashboard generated: {OUTPUT_FILE}")
-    print(f"  Active: {len(active_cards)} bottles ({len(active_groups)} products), total value ${total_value:,.2f}")
+    print(f"  Active: {len(active_cards)} bottles ({active_group_count} products, "
+          f"{len(active_sections)} brands), total value ${total_value:,.2f}")
     print(f"  Archive: {len(archive_cards)} bottles, realized gain ${archive_realized_gain:,.2f}")
 
 
@@ -243,14 +250,24 @@ def render_archive_card(c):
         """
 
 
-def render_html(active_groups, archive_cards, total_paid, total_value,
+def render_brand_section(section):
+    """A brand heading followed by that brand's product-group cards."""
+    header = (
+        f'<div class="brand-header">{section["brand"]}'
+        f'<span class="brand-count">{len(section["groups"])}</span></div>'
+    )
+    cards = "".join(render_active_group(g) for g in section["groups"])
+    return header + cards
+
+
+def render_html(active_sections, archive_cards, total_paid, total_value,
                 total_gain, total_gain_pct, archive_realized_gain, last_run,
                 bottle_count):
     sign       = "+" if total_gain >= 0 else ""
     gain_class = "positive" if total_gain >= 0 else "negative"
     arch_sign  = "+" if archive_realized_gain >= 0 else ""
 
-    active_html  = "".join(render_active_group(g) for g in active_groups)
+    active_html  = "".join(render_brand_section(s) for s in active_sections)
     archive_html = (
         "".join(render_archive_card(c) for c in archive_cards)
         if archive_cards else
@@ -303,6 +320,18 @@ h1 {{
     font-family: Georgia, serif; font-size: 16px; color: #d4a574;
     letter-spacing: 1px; margin: 28px 0 12px;
     padding-bottom: 6px; border-bottom: 1px solid rgba(212,165,116,.18);
+}}
+.brand-header {{
+    display: flex; align-items: baseline; gap: 8px;
+    font-family: Georgia, serif; font-size: 15px; font-weight: 700;
+    color: #d4a574; letter-spacing: .5px; text-transform: uppercase;
+    margin: 22px 2px 10px; padding-bottom: 6px;
+    border-bottom: 1px solid rgba(212,165,116,.18);
+}}
+.brand-count {{
+    font-size: 11px; font-weight: 700; color: #a08770;
+    background: rgba(212,165,116,.12); border: 1px solid rgba(212,165,116,.28);
+    border-radius: 5px; padding: 1px 7px; letter-spacing: 0;
 }}
 .card {{
     position: relative;

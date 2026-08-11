@@ -45,6 +45,18 @@ h1 {
     letter-spacing: 1px; margin: 28px 0 12px;
     padding-bottom: 6px; border-bottom: 1px solid rgba(212,165,116,.18);
 }
+.brand-header {
+    display: flex; align-items: baseline; gap: 8px;
+    font-family: Georgia, serif; font-size: 15px; font-weight: 700;
+    color: #d4a574; letter-spacing: .5px; text-transform: uppercase;
+    margin: 22px 2px 10px; padding-bottom: 6px;
+    border-bottom: 1px solid rgba(212,165,116,.18);
+}
+.brand-count {
+    font-size: 11px; font-weight: 700; color: #a08770;
+    background: rgba(212,165,116,.12); border: 1px solid rgba(212,165,116,.28);
+    border-radius: 5px; padding: 1px 7px; letter-spacing: 0;
+}
 .card {
     position: relative;
     background: linear-gradient(135deg, rgba(30,18,10,.9), rgba(45,26,14,.85));
@@ -97,61 +109,23 @@ footer { text-align: center; padding: 28px 0 16px; color: #6b5544; font-size: 11
 
     <div class="summary">
         <div class="summary-label">Current Value (asking-based)</div>
-        <div class="summary-value">$4,529</div>
-        <div class="summary-gain positive">+$2,814 · +164.1%</div>
+        <div class="summary-value">$4,394</div>
+        <div class="summary-gain positive">+$2,768 · +170.3%</div>
         <div class="summary-note">Market estimates = median of retail + auction asking prices. eBay sold prices not included.</div>
         <div class="summary-stats">
-            <div><span>Total Paid</span><strong>$1,715</strong></div>
-            <div><span>Bottles</span><strong>17</strong></div>
+            <div><span>Total Paid</span><strong>$1,626</strong></div>
+            <div><span>Bottles</span><strong>19</strong></div>
         </div>
     </div>
 
-    <div class="section-header">Active Collection — 17 bottles, $4,529 current value</div>
-    <div class="bottles">
+    <div class="section-header">Active Collection — 19 bottles, $4,394 current value</div>
+    <div class="bottles"><div class="brand-header">Blanton's<span class="brand-count">4</span></div>
         <div class="card">
-            <div class="card-name">Weller Single Barrel</div>
-            <div class="card-subtitle">97 proof · L280 0115:43</div>
+            <div class="card-name">Blanton's Gold Edition</div>
+            <div class="card-subtitle">103 proof · Barrel No. 218, Rack No. 9, dumped on 12-18-25, stored in Warehouse H</div>
             <div class="card-value-row">
-                <div class="card-value">$400</div>
-                <div class="card-gain positive">+$290 · +264% per bottle</div>
-            </div>
-            <div class="card-meta">
-                <div><span>Paid</span><strong>$110</strong></div>
-                <div><span>MSRP</span><strong>$50</strong></div>
-                <div><span>Sources</span><strong>4</strong></div>
-            </div>
-            
-            
-            <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#weller_single_barrel">Edit / Archive</a>
-            </div>
-        </div>
-        
-        <div class="card">
-            <div class="card-name">Stagg Kentucky Straight Bourbon Whiskey</div>
-            <div class="card-subtitle">126.5 proof · Batch 25A</div>
-            <div class="card-value-row">
-                <div class="card-value">$200</div>
-                <div class="card-gain positive">+$101 · +102% per bottle</div>
-            </div>
-            <div class="card-meta">
-                <div><span>Paid</span><strong>$99</strong></div>
-                <div><span>MSRP</span><strong>$60</strong></div>
-                <div><span>Sources</span><strong>3</strong></div>
-            </div>
-            
-            
-            <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#stagg_kentucky_straight_bourbon_whiskey">Edit / Archive</a>
-            </div>
-        </div>
-        
-        <div class="card">
-            <div class="card-name">Blanton's Single Barrel Japanese Export</div>
-            <div class="card-subtitle">80 proof · Dumped on 3-12-24 from Barrel No. 536 on Rick No. 84. Registered Bottle No. 1163</div>
-            <div class="card-value-row">
-                <div class="card-value">$225</div>
-                <div class="card-gain positive">+$115 · +105% per bottle</div>
+                <div class="card-value">$235</div>
+                <div class="card-gain positive">+$125 · +114% per bottle</div>
             </div>
             <div class="card-meta">
                 <div><span>Paid</span><strong>$110</strong></div>
@@ -161,7 +135,7 @@ footer { text-align: center; padding: 28px 0 16px; color: #6b5544; font-size: 11
             
             
             <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#blantons_single_barrel_japanese_export">Edit / Archive</a>
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#blantons_gold_edition">Edit / Archive</a>
             </div>
         </div>
         
@@ -185,11 +159,30 @@ footer { text-align: center; padding: 28px 0 16px; color: #6b5544; font-size: 11
         </div>
         
         <div class="card">
-            <div class="card-name">Blanton's Gold Edition</div>
-            <div class="card-subtitle">103 proof · Barrel No. 218, Rack No. 9, dumped on 12-18-25, stored in Warehouse H</div>
+            <div class="card-name">Blanton's Single Barrel Bourbon</div>
+            <div class="card-subtitle">93.0 proof · Dumped on 5-20-24 from Barrel No 13 on Rick No 12</div>
             <div class="card-value-row">
-                <div class="card-value">$235</div>
-                <div class="card-gain positive">+$125 · +114% per bottle</div>
+                <div class="card-value">—</div>
+                <div class="card-gain neutral">tracking soon</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>—</strong></div>
+                <div><span>MSRP</span><strong>—</strong></div>
+                <div><span>Sources</span><strong>0</strong></div>
+            </div>
+            
+            
+            <div class="card-actions">
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#blantons_single_barrel_bourbon">Edit / Archive</a>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-name">Blanton's Single Barrel Japanese Export</div>
+            <div class="card-subtitle">80 proof · Dumped on 3-12-24 from Barrel No. 536 on Rick No. 84. Registered Bottle No. 1163</div>
+            <div class="card-value-row">
+                <div class="card-value">$225</div>
+                <div class="card-gain positive">+$115 · +105% per bottle</div>
             </div>
             <div class="card-meta">
                 <div><span>Paid</span><strong>$110</strong></div>
@@ -199,83 +192,26 @@ footer { text-align: center; padding: 28px 0 16px; color: #6b5544; font-size: 11
             
             
             <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#blantons_gold_edition">Edit / Archive</a>
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#blantons_single_barrel_japanese_export">Edit / Archive</a>
             </div>
         </div>
-        
+        <div class="brand-header">Colonel E.H. Taylor<span class="brand-count">2</span></div>
         <div class="card">
-            <div class="card-name">Eagle Rare 10 Year Single Barrel Select</div>
-            <div class="card-subtitle">90 proof · L23211023 23N Barrel #045</div>
+            <div class="card-name">Colonel E.H. Taylor Barrel Proof</div>
+            <div class="card-subtitle">127.4 proof · L25212 01 21:2:D REF IA 5C VT 1C</div>
             <div class="card-value-row">
-                <div class="card-value">$85</div>
-                <div class="card-gain negative">$-25 · -23% per bottle</div>
+                <div class="card-value">$375</div>
+                <div class="card-gain positive">+$265 · +241% per bottle</div>
             </div>
             <div class="card-meta">
                 <div><span>Paid</span><strong>$110</strong></div>
-                <div><span>MSRP</span><strong>$40</strong></div>
+                <div><span>MSRP</span><strong>$80</strong></div>
                 <div><span>Sources</span><strong>4</strong></div>
             </div>
             
             
             <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#eagle_rare_10_year_single_barrel_select">Edit / Archive</a>
-            </div>
-        </div>
-        
-        <div class="card">
-            <div class="card-name">Little Book Chapter 5 "The Invitation"</div>
-            <div class="card-subtitle">58.65 proof · L14388CL 692871437</div>
-            <div class="card-value-row">
-                <div class="card-value">$400</div>
-                <div class="card-gain positive">+$280 · +233% per bottle</div>
-            </div>
-            <div class="card-meta">
-                <div><span>Paid</span><strong>$120</strong></div>
-                <div><span>MSRP</span><strong>$125</strong></div>
-                <div><span>Sources</span><strong>3</strong></div>
-            </div>
-            
-            
-            <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#little_book_chapter_5_the_invitation">Edit / Archive</a>
-            </div>
-        </div>
-        
-        <div class="card">
-            <div class="card-name">Little Book Chapter 08: Path Not Taken</div>
-            <div class="card-subtitle">118.2 proof · Batch 014</div>
-            <div class="card-value-row">
-                <div class="card-value">$200</div>
-                <div class="card-gain positive">+$90 · +82% per bottle</div>
-            </div>
-            <div class="card-meta">
-                <div><span>Paid</span><strong>$110</strong></div>
-                <div><span>MSRP</span><strong>$150</strong></div>
-                <div><span>Sources</span><strong>1</strong></div>
-            </div>
-            
-            
-            <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#little_book_chapter_08_path_not_taken">Edit / Archive</a>
-            </div>
-        </div>
-        
-        <div class="card">
-            <div class="card-name">Thomas H. Handy Sazerac Straight Rye Whiskey</div>
-            <div class="card-subtitle">64.5 proof · 23 01220 REF B 31 15 CALIF</div>
-            <div class="card-value-row">
-                <div class="card-value">$600</div>
-                <div class="card-gain positive">+$421 · +235% per bottle</div>
-            </div>
-            <div class="card-meta">
-                <div><span>Paid</span><strong>$179</strong></div>
-                <div><span>MSRP</span><strong>$150</strong></div>
-                <div><span>Sources</span><strong>2</strong></div>
-            </div>
-            
-            
-            <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#thomas_h_handy_sazerac_straight_rye_whiskey">Edit / Archive</a>
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#colonel_eh_taylor_barrel_proof">Edit / Archive</a>
             </div>
         </div>
         
@@ -297,26 +233,102 @@ footer { text-align: center; padding: 28px 0 16px; color: #6b5544; font-size: 11
                 <a class="card-btn edit" href="http://100.111.112.8:5001/#colonel_eh_taylor_straight_rye_bottled_in_bond">Edit / Archive</a>
             </div>
         </div>
-        
+        <div class="brand-header">Eagle Rare<span class="brand-count">2</span></div>
         <div class="card">
-            <div class="card-name">Colonel E.H. Taylor Barrel Proof</div>
-            <div class="card-subtitle">127.4 proof · L25212 01 21:2:D REF IA 5C VT 1C</div>
+            <div class="card-name">Eagle Rare 10 Year Single Barrel Select</div>
+            <div class="card-subtitle">90 proof · L23211023 23N Barrel #045</div>
             <div class="card-value-row">
-                <div class="card-value">$375</div>
-                <div class="card-gain positive">+$265 · +241% per bottle</div>
+                <div class="card-value">$85</div>
+                <div class="card-gain negative">$-25 · -23% per bottle</div>
             </div>
             <div class="card-meta">
                 <div><span>Paid</span><strong>$110</strong></div>
-                <div><span>MSRP</span><strong>$80</strong></div>
+                <div><span>MSRP</span><strong>$40</strong></div>
                 <div><span>Sources</span><strong>4</strong></div>
             </div>
             
             
             <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#colonel_eh_taylor_barrel_proof">Edit / Archive</a>
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#eagle_rare_10_year_single_barrel_select">Edit / Archive</a>
             </div>
         </div>
         
+        <div class="card">
+            <div class="card-name">Eagle Rare 12 Year Kentucky Straight Bourbon Whiskey</div>
+            <div class="card-subtitle">90.0 proof · 12 90113 IA 54</div>
+            <div class="card-value-row">
+                <div class="card-value">—</div>
+                <div class="card-gain neutral">tracking soon</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>—</strong></div>
+                <div><span>MSRP</span><strong>—</strong></div>
+                <div><span>Sources</span><strong>0</strong></div>
+            </div>
+            
+            
+            <div class="card-actions">
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#eagle_rare_12_year_kentucky_straight_bourbon_whiskey">Edit / Archive</a>
+            </div>
+        </div>
+        <div class="brand-header">Little Book Chapter<span class="brand-count">2</span></div>
+        <div class="card">
+            <div class="card-name">Little Book Chapter 08: Path Not Taken</div>
+            <div class="card-subtitle">118.2 proof · Batch 014</div>
+            <div class="card-value-row">
+                <div class="card-value">$200</div>
+                <div class="card-gain positive">+$90 · +82% per bottle</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>$110</strong></div>
+                <div><span>MSRP</span><strong>$150</strong></div>
+                <div><span>Sources</span><strong>1</strong></div>
+            </div>
+            
+            
+            <div class="card-actions">
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#little_book_chapter_08_path_not_taken">Edit / Archive</a>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-name">Little Book Chapter 5 "The Invitation"</div>
+            <div class="card-subtitle">58.65 proof · L14388CL 692871437</div>
+            <div class="card-value-row">
+                <div class="card-value">$400</div>
+                <div class="card-gain positive">+$280 · +233% per bottle</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>$120</strong></div>
+                <div><span>MSRP</span><strong>$125</strong></div>
+                <div><span>Sources</span><strong>3</strong></div>
+            </div>
+            
+            
+            <div class="card-actions">
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#little_book_chapter_5_the_invitation">Edit / Archive</a>
+            </div>
+        </div>
+        <div class="brand-header">Old Fitzgerald<span class="brand-count">1</span></div>
+        <div class="card">
+            <div class="card-name">Old Fitzgerald Bottled-in-Bond 9 Year</div>
+            <div class="card-subtitle">100.0 proof</div>
+            <div class="card-value-row">
+                <div class="card-value">$380</div>
+                <div class="card-gain positive">+$281 · +284% per bottle</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>$99</strong></div>
+                <div><span>MSRP</span><strong>$130</strong></div>
+                <div><span>Sources</span><strong>3</strong></div>
+            </div>
+            
+            
+            <div class="card-actions">
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#old_fitzgerald_bottled_in_bond_9_year">Edit / Archive</a>
+            </div>
+        </div>
+        <div class="brand-header">Penelope<span class="brand-count">1</span></div>
         <div class="card">
             <div class="card-name">Penelope Fuck Cancer Blend of Bourbon Whiskey</div>
             <div class="card-subtitle">—</div>
@@ -335,26 +347,45 @@ footer { text-align: center; padding: 28px 0 16px; color: #6b5544; font-size: 11
                 <a class="card-btn edit" href="http://100.111.112.8:5001/#penelope_bourbon_blend_of_straight_whiskeys">Edit / Archive</a>
             </div>
         </div>
-        
+        <div class="brand-header">Stagg<span class="brand-count">1</span></div>
         <div class="card">
-            <div class="card-name">Weller Antique 107</div>
-            <div class="card-subtitle">107 proof · 26L0591 07:02B REF 22 5C WT 1569</div>
+            <div class="card-name">Stagg Kentucky Straight Bourbon Whiskey</div>
+            <div class="card-subtitle">126.5 proof · Batch 25A</div>
             <div class="card-value-row">
-                <div class="card-value">$134</div>
-                <div class="card-gain positive">+$45 · +51% per bottle</div>
+                <div class="card-value">$200</div>
+                <div class="card-gain positive">+$101 · +102% per bottle</div>
             </div>
             <div class="card-meta">
-                <div><span>Paid</span><strong>$89</strong></div>
-                <div><span>MSRP</span><strong>$50</strong></div>
-                <div><span>Sources</span><strong>4</strong></div>
+                <div><span>Paid</span><strong>$99</strong></div>
+                <div><span>MSRP</span><strong>$60</strong></div>
+                <div><span>Sources</span><strong>3</strong></div>
             </div>
             
             
             <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#weller_antique_107">Edit / Archive</a>
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#stagg_kentucky_straight_bourbon_whiskey">Edit / Archive</a>
             </div>
         </div>
-        
+        <div class="brand-header">Thomas H. Handy<span class="brand-count">1</span></div>
+        <div class="card">
+            <div class="card-name">Thomas H. Handy Sazerac Straight Rye Whiskey</div>
+            <div class="card-subtitle">64.5 proof · 23 01220 REF B 31 15 CALIF</div>
+            <div class="card-value-row">
+                <div class="card-value">$600</div>
+                <div class="card-gain positive">+$421 · +235% per bottle</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>$179</strong></div>
+                <div><span>MSRP</span><strong>$150</strong></div>
+                <div><span>Sources</span><strong>2</strong></div>
+            </div>
+            
+            
+            <div class="card-actions">
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#thomas_h_handy_sazerac_straight_rye_whiskey">Edit / Archive</a>
+            </div>
+        </div>
+        <div class="brand-header">Weller<span class="brand-count">4</span></div>
         <div class="card">
             <div class="card-name">Weller 12 Year</div>
             <div class="card-subtitle">90.0 proof · L25202 011923B</div>
@@ -371,6 +402,25 @@ footer { text-align: center; padding: 28px 0 16px; color: #6b5544; font-size: 11
             
             <div class="card-actions">
                 <a class="card-btn edit" href="http://100.111.112.8:5001/#weller_12_year">Edit / Archive</a>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-name">Weller C.Y.P.B. (Craft Your Perfect Bourbon)</div>
+            <div class="card-subtitle">95.0 proof · L26103 0119Z9B</div>
+            <div class="card-value-row">
+                <div class="card-value">$440</div>
+                <div class="card-gain neutral">no acquisition data</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>—</strong></div>
+                <div><span>MSRP</span><strong>$50</strong></div>
+                <div><span>Sources</span><strong>4</strong></div>
+            </div>
+            
+            
+            <div class="card-actions">
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#weller_cypb_craft_your_perfect_bourbon">Edit / Archive</a>
             </div>
         </div>
         
@@ -394,45 +444,45 @@ footer { text-align: center; padding: 28px 0 16px; color: #6b5544; font-size: 11
         </div>
         
         <div class="card">
-            <div class="card-name">Old Fitzgerald Bottled-in-Bond 9 Year</div>
-            <div class="card-subtitle">100.0 proof</div>
+            <div class="card-name">Weller Single Barrel</div>
+            <div class="card-subtitle">97 proof · L280 0115:43</div>
             <div class="card-value-row">
-                <div class="card-value">$380</div>
-                <div class="card-gain positive">+$281 · +284% per bottle</div>
+                <div class="card-value">$400</div>
+                <div class="card-gain positive">+$290 · +264% per bottle</div>
             </div>
             <div class="card-meta">
-                <div><span>Paid</span><strong>$99</strong></div>
-                <div><span>MSRP</span><strong>$130</strong></div>
-                <div><span>Sources</span><strong>3</strong></div>
-            </div>
-            
-            
-            <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#old_fitzgerald_bottled_in_bond_9_year">Edit / Archive</a>
-            </div>
-        </div>
-        
-        <div class="card">
-            <div class="card-name">Weller C.Y.P.B. (Craft Your Perfect Bourbon)</div>
-            <div class="card-subtitle">95.0 proof · L26103 0119Z9B</div>
-            <div class="card-value-row">
-                <div class="card-value">$440</div>
-                <div class="card-gain neutral">no acquisition data</div>
-            </div>
-            <div class="card-meta">
-                <div><span>Paid</span><strong>—</strong></div>
+                <div><span>Paid</span><strong>$110</strong></div>
                 <div><span>MSRP</span><strong>$50</strong></div>
                 <div><span>Sources</span><strong>4</strong></div>
             </div>
             
             
             <div class="card-actions">
-                <a class="card-btn edit" href="http://100.111.112.8:5001/#weller_cypb_craft_your_perfect_bourbon">Edit / Archive</a>
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#weller_single_barrel">Edit / Archive</a>
+            </div>
+        </div>
+        <div class="brand-header">Willett<span class="brand-count">1</span></div>
+        <div class="card">
+            <div class="card-name">Willett Family Estate Bottled Small Batch Bourbon</div>
+            <div class="card-subtitle">126.0 proof · W2G09/D7AC</div>
+            <div class="card-value-row">
+                <div class="card-value">—</div>
+                <div class="card-gain neutral">tracking soon</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>—</strong></div>
+                <div><span>MSRP</span><strong>—</strong></div>
+                <div><span>Sources</span><strong>0</strong></div>
+            </div>
+            
+            
+            <div class="card-actions">
+                <a class="card-btn edit" href="http://100.111.112.8:5001/#willett_family_estate_bottled_small_batch_bourbon">Edit / Archive</a>
             </div>
         </div>
         </div>
 
-    <div class="section-header">Archive — 1 bottles, +$0 realized gain</div>
+    <div class="section-header">Archive — 2 bottles, +$0 realized gain</div>
     <div class="bottles">
         <div class="card archived">
             <div class="archive-badge">CONSUMED</div>
@@ -444,6 +494,21 @@ footer { text-align: center; padding: 28px 0 16px; color: #6b5544; font-size: 11
             </div>
             <div class="card-meta">
                 <div><span>Paid</span><strong>$90</strong></div>
+                <div><span>Sale</span><strong>—</strong></div>
+                <div><span>Realized</span><strong>—</strong></div>
+            </div>
+        </div>
+        
+        <div class="card archived">
+            <div class="archive-badge">CONSUMED</div>
+            <div class="card-name">Weller Antique 107</div>
+            <div class="card-subtitle">Resolved 2026-08-10</div>
+            <div class="card-value-row">
+                <div class="card-value">—</div>
+                <div class="card-gain neutral">—</div>
+            </div>
+            <div class="card-meta">
+                <div><span>Paid</span><strong>$89</strong></div>
                 <div><span>Sale</span><strong>—</strong></div>
                 <div><span>Realized</span><strong>—</strong></div>
             </div>
