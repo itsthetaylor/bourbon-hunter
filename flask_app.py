@@ -1,38 +1,63 @@
 """
-Bourbon Hunter — Phase 2 local editor (Flask).
+Bourbon Hunter — hosted multi-user app (Flask).
 
-Mobile-first dark UI for editing the collection, served over Tailscale.
+Public landing page at /. The collection editor lives behind login and is scoped
+to the logged-in user — a logged-out visitor can see NO bottle data anywhere.
 
-DATA-SAFETY CONTRACT (do not break):
-  * This app writes ONLY to the `bottles` table. It NEVER writes `price_history`.
-  * Every bottle write goes through db.py, which wraps each change in a single
-    SQLite transaction (atomic — replaces the old temp-file + os.replace pattern).
-  * Schema lives in the DB; this file never hardcodes column lists.
+SECURITY CONTRACT (do not break):
+  * Every collection route is @login_required and passes current_user.id to db.py,
+    which filters every bottle read/write by user_id. One user can never see or
+    edit another user's bottles.
+  * Passwords are bcrypt-hashed (auth.py); never stored or logged in plaintext.
+  * Sessions via Flask-Login (signed cookie); secret from FLASK_SECRET_KEY env var.
+  * Signup is invite-gated by the SIGNUP_CODE env var.
 """
 
 import logging
 import os
 import traceback
-from collections import OrderedDict
 
-from flask import Flask, request, redirect, url_for, render_template_string, abort, jsonify
+from flask import (
+    Flask, request, redirect, url_for, render_template_string, abort, jsonify,
+    get_flashed_messages,
+)
+from flask_login import login_required, login_user, logout_user, current_user
+from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 
+import auth
 import brands
 import db
 import pipeline
 
 load_dotenv()
 
-# TAILSCALE_IP is DISPLAY-ONLY — the "open on your phone" hint and the editor_base
-# link in the template. Flask BINDS to BIND_HOST (0.0.0.0, all interfaces), so it
-# starts even when Tailscale hasn't assigned the IP yet (NoState). Reaching it over
-# Tailscale still uses this IP.
-TAILSCALE_IP   = os.getenv("FLASK_TAILSCALE_IP", "127.0.0.1")
-BIND_HOST      = "0.0.0.0"
-PORT           = 5001
+PORT      = int(os.getenv("PORT", "5001"))   # Railway injects $PORT; 5001 locally
+BIND_HOST = "0.0.0.0"
+SIGNUP_CODE = os.getenv("SIGNUP_CODE")        # invite gate; unset => signup closed
+# Secure cookies in production (Railway serves HTTPS); relaxed locally over http.
+_IS_PROD = bool(os.getenv("RAILWAY_ENVIRONMENT"))
 
 app = Flask(__name__)
+
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
+if not app.secret_key:
+    raise RuntimeError(
+        "FLASK_SECRET_KEY is not set. Set it in .env (local) and in Railway's "
+        "Variables (production). It signs the session cookie — never hardcode it."
+    )
+
+# Behind Railway's TLS-terminating proxy: trust X-Forwarded-* so url_for builds
+# https URLs and secure cookies are recognized.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",   # blocks the session cookie on cross-site POSTs
+    SESSION_COOKIE_SECURE=_IS_PROD,
+)
+
+auth.login_manager.init_app(app)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 app.logger.setLevel(logging.INFO)
@@ -40,18 +65,19 @@ app.logger.setLevel(logging.INFO)
 
 @app.errorhandler(Exception)
 def handle_exception(e):
+    # Let HTTP exceptions (404, login redirects, etc.) behave normally.
+    if isinstance(e, HTTPException):
+        return e
+    # Never leak stack traces to users; log server-side only.
     app.logger.error("Unhandled exception:\n%s", traceback.format_exc())
-    return (
-        f"<pre style='color:red;padding:20px'>Error: {e}\n\n{traceback.format_exc()}</pre>",
-        500,
-    )
+    return ("<p style='padding:24px;font-family:sans-serif'>Something went wrong.</p>", 500)
 
 
 URL_FIELDS = [
-    ("wooden_cork_url",  "Wooden Cork",    pipeline.get_price_wooden_cork),
+    ("wooden_cork_url",  "Wooden Cork",      pipeline.get_price_wooden_cork),
     ("bbb_url",          "Bottle Blue Book", pipeline.get_price_bbb),
-    ("barrel_tap_url",   "The Barrel Tap", pipeline.get_price_barrel_tap),
-    ("keg_n_bottle_url", "Keg N Bottle",   pipeline.get_price_keg_n_bottle),
+    ("barrel_tap_url",   "The Barrel Tap",   pipeline.get_price_barrel_tap),
+    ("keg_n_bottle_url", "Keg N Bottle",     pipeline.get_price_keg_n_bottle),
 ]
 URL_KEYS       = [k for k, _, _ in URL_FIELDS]
 URL_LABELS     = [(k, label) for k, label, _ in URL_FIELDS]
@@ -59,19 +85,12 @@ SCRAPER_BY_KEY = {k: fn for k, _, fn in URL_FIELDS}
 
 
 # --------------------------------------------------------------------------- #
-# Data helpers
+# Display helpers (pure)
 # --------------------------------------------------------------------------- #
 
-def latest_market_values():
-    return db.latest_market_values()
-
-
-def active_bottles():
-    return db.get_active_bottles()
-
-
 def product_groups(bottles):
-    """Return list-of-lists grouped by product_key, preserving CSV order."""
+    """Group by product_key, preserving order."""
+    from collections import OrderedDict
     groups = OrderedDict()
     for b in bottles:
         pk = b.get("product_key") or b.get("bottle_id")
@@ -80,48 +99,118 @@ def product_groups(bottles):
 
 
 def brand_groups(bottles):
-    """DISPLAY-ONLY brand grouping for the editor list. Buckets the product-key
-    groups by derived brand and sorts them — shared with the dashboard via the
-    brands module so the two views match exactly."""
+    """DISPLAY-ONLY brand grouping (shared with the dashboard via brands.py)."""
     return brands.brand_sections(product_groups(bottles))
 
 
-def _render_index(error=None, status_code=200):
+def _safe_next(nxt):
+    """Only allow same-site relative redirect targets (block open redirects)."""
+    if nxt and nxt.startswith("/") and not nxt.startswith("//"):
+        return nxt
+    return None
+
+
+def _render_collection(error=None, status_code=200):
+    """Render the current user's collection ONLY (scoped by current_user.id)."""
     try:
-        bottles = active_bottles()
+        bottles = db.get_active_bottles(current_user.id)
         html = render_template_string(
             INDEX_TEMPLATE,
             brand_groups=brand_groups(bottles),
-            market=latest_market_values(),
+            market=db.latest_market_values(current_user.id),
             url_labels=URL_LABELS,
-            editor_base=f"http://{TAILSCALE_IP}:{PORT}",
+            user_email=current_user.email,
             error=error,
         )
-    except Exception as e:
-        app.logger.error("_render_index crashed:\n%s", traceback.format_exc())
-        return (
-            f"<pre style='color:red;padding:20px'>Render error: {e}\n\n"
-            f"{traceback.format_exc()}</pre>",
-            500,
-        )
+    except Exception:
+        app.logger.error("collection render crashed:\n%s", traceback.format_exc())
+        return ("<p style='padding:24px;font-family:sans-serif'>Couldn't load your "
+                "collection.</p>", 500)
     return (html, status_code) if status_code != 200 else html
 
 
 # --------------------------------------------------------------------------- #
-# Routes
+# Public + auth routes
 # --------------------------------------------------------------------------- #
 
 @app.route("/")
 def index():
-    return _render_index()
+    """Public landing page — NO bottle data."""
+    return render_template_string(
+        LANDING_TEMPLATE,
+        authenticated=current_user.is_authenticated,
+    )
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("collection"))
+    error = None
+    if request.method == "POST":
+        email = request.form.get("email", "")
+        password = request.form.get("password", "")
+        row = db.get_user_by_email(email)
+        if row and auth.verify_password(password, row["password_hash"]):
+            login_user(auth.User(row["id"], row["email"], row["is_admin"]))
+            return redirect(_safe_next(request.args.get("next")) or url_for("collection"))
+        error = "Invalid email or password."
+    msgs = get_flashed_messages()
+    return render_template_string(LOGIN_TEMPLATE, error=error, flashes=msgs), \
+        (401 if error else 200)
+
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if current_user.is_authenticated:
+        return redirect(url_for("collection"))
+    error = None
+    if request.method == "POST":
+        code = request.form.get("invite_code", "")
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
+        if not SIGNUP_CODE or code != SIGNUP_CODE:
+            error = "Invalid invite code."
+        elif "@" not in email or "." not in email.split("@")[-1]:
+            error = "Enter a valid email address."
+        elif len(password) < 8:
+            error = "Password must be at least 8 characters."
+        else:
+            try:
+                pw_hash = auth.hash_password(password)
+                is_admin = (db.count_users() == 0)  # first account is the owner/admin
+                uid = db.create_user(email, pw_hash, is_admin=is_admin)
+                login_user(auth.User(uid, email, is_admin))
+                return redirect(url_for("collection"))
+            except ValueError as e:
+                error = str(e)
+    return render_template_string(SIGNUP_TEMPLATE, error=error), (400 if error else 200)
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("index"))
+
+
+# --------------------------------------------------------------------------- #
+# Collection routes — ALL login-gated and scoped to current_user.id
+# --------------------------------------------------------------------------- #
+
+@app.route("/collection")
+@login_required
+def collection():
+    return _render_collection()
 
 
 @app.route("/edit/<bottle_id>", methods=["POST"])
+@login_required
 def edit(bottle_id):
-    """Update paid and/or the 4 *_url fields for one bottle."""
-    target = db.get_bottle(bottle_id)
+    """Update paid and/or the 4 *_url fields for one of the user's bottles."""
+    target = db.get_bottle(bottle_id, current_user.id)
     if target is None:
-        abort(404)
+        abort(404)  # not found OR not yours — same response either way
 
     fields = {}
     if "paid" in request.form:
@@ -130,40 +219,43 @@ def edit(bottle_id):
             try:
                 float(raw)
             except ValueError:
-                return _render_index(error=f"'{raw}' is not a valid price.", status_code=400)
-        fields["paid"] = raw  # db coerces "" -> NULL, number -> REAL
+                return _render_collection(error=f"'{raw}' is not a valid price.", status_code=400)
+        fields["paid"] = raw
 
     for key in URL_KEYS:
         if key in request.form:
             fields[key] = request.form.get(key, "").strip()
 
-    db.update_bottle_fields(bottle_id, fields)
-    return redirect(url_for("index") + f"#{target.get('product_key') or bottle_id}")
+    db.update_bottle_fields(bottle_id, fields, current_user.id)
+    return redirect(url_for("collection") + f"#{target.get('product_key') or bottle_id}")
 
 
 @app.route("/archive/<bottle_id>", methods=["POST"])
+@login_required
 def archive(bottle_id):
     status     = request.form.get("status", "").strip()
     sale_price = request.form.get("sale_price", "").strip() or None
     try:
-        db.set_status(bottle_id, status, sale_price)
+        db.set_status(bottle_id, status, current_user.id, sale_price)
     except ValueError as e:
-        return _render_index(error=str(e), status_code=400)
-    return redirect(url_for("index"))
+        return _render_collection(error=str(e), status_code=400)
+    return redirect(url_for("collection"))
 
 
 @app.route("/urls")
+@login_required
 def urls():
     return render_template_string(
         URLS_TEMPLATE,
-        bottles=active_bottles(),
+        bottles=db.get_active_bottles(current_user.id),
         url_labels=URL_LABELS,
     )
 
 
 @app.route("/update_urls", methods=["POST"])
+@login_required
 def update_urls():
-    by_bottle = {}  # bottle_id -> {url_field: value}
+    by_bottle = {}
     for form_key, value in request.form.items():
         if "__" not in form_key:
             continue
@@ -172,13 +264,14 @@ def update_urls():
             by_bottle.setdefault(bid, {})[field] = value.strip()
     for bid, fields in by_bottle.items():
         try:
-            db.update_bottle_fields(bid, fields)
+            db.update_bottle_fields(bid, fields, current_user.id)
         except ValueError:
-            pass  # unknown bottle_id — skip (mirrors the old membership check)
+            pass  # not this user's bottle (or unknown) — skip silently
     return redirect(url_for("urls"))
 
 
 @app.route("/verify_url", methods=["POST"])
+@login_required
 def verify_url():
     source = request.form.get("source", "")
     url    = request.form.get("url", "").strip()
@@ -256,7 +349,6 @@ h1 {
   padding: 10px 0 14px; border-bottom: 1px solid rgba(212,165,116,.12); margin-bottom: 14px; }
 .market-val { font-family: Georgia, serif; font-size: 26px; color: #d4a574; font-weight: 700; }
 .market-lbl { font-size: 11px; color: #a08770; text-transform: uppercase; letter-spacing: 1.5px; }
-/* Action row: Drank / Sold / Edit */
 .action-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
 .action-form { display: flex; gap: 4px; align-items: center; }
 .btn-action {
@@ -271,11 +363,10 @@ h1 {
   border: 1px solid rgba(212,165,116,.3); border-radius: 8px;
   padding: 10px 8px; font-size: 15px; -webkit-appearance: none;
 }
-/* Edit pane (URL + paid fields) */
 .edit-pane { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(212,165,116,.12); }
 label.fld { display: block; font-size: 11px; color: #a08770;
   text-transform: uppercase; letter-spacing: 1px; font-weight: 600; margin: 12px 0 4px; }
-input[type=text], input[type=number], select, textarea {
+input[type=text], input[type=number], input[type=email], input[type=password], select, textarea {
   width: 100%; background: #1a0f08; color: #f4e4c1;
   border: 1px solid rgba(212,165,116,.3); border-radius: 10px;
   padding: 13px 12px; font-size: 16px; -webkit-appearance: none;
@@ -292,7 +383,6 @@ button {
   border: 1px solid rgba(212,165,116,.35); padding: 13px 14px; white-space: nowrap; }
 .verify-msg { font-size: 12px; margin-top: 4px; min-height: 14px; }
 .verify-ok { color: #b8e986; } .verify-bad { color: #e88686; }
-/* Multi-bottle group expand */
 .grp-details { margin-top: 10px; }
 .grp-summary {
   color: #a08770; font-size: 13px; cursor: pointer; list-style: none;
@@ -302,9 +392,22 @@ button {
 .bottle-unit { padding: 10px 0 4px; border-top: 1px solid rgba(212,165,116,.08); }
 .unit-meta { color: #a08770; font-size: 12px; margin-bottom: 8px; }
 footer { text-align: center; color: #6b5544; font-size: 11px; padding: 20px 0; }
+/* Landing + auth */
+.hero { text-align: center; padding: 56px 20px 28px; }
+.hero h1 { font-size: 40px; }
+.tagline { color: #c9b896; font-size: 16px; margin: 14px 0 32px; font-style: italic; }
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.cta a { text-decoration: none; padding: 14px 26px; border-radius: 12px; font-weight: 700; font-size: 15px; }
+.cta .primary { background: #5a3318; color: #f4e4c1; border: 1px solid rgba(212,165,116,.5); }
+.cta .ghost { background: rgba(45,26,14,.6); color: #d4a574; border: 1px solid rgba(212,165,116,.35); }
+.auth-card { max-width: 380px; margin: 40px auto; background: linear-gradient(135deg, rgba(30,18,10,.92), rgba(45,26,14,.88));
+  border: 1px solid rgba(212,165,116,.2); border-radius: 16px; padding: 28px 24px; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
+.auth-card h2 { font-family: Georgia, serif; color: #d4a574; font-size: 22px; text-align: center; margin-bottom: 6px; }
+.auth-sub { text-align: center; color: #a08770; font-size: 13px; margin-bottom: 20px; }
+.auth-alt { text-align: center; margin-top: 16px; font-size: 13px; color: #a08770; }
+.auth-alt a { color: #d4a574; }
 """
 
-# Shared action buttons macro (Jinja2 macro inlined as a string to keep template readable)
 _ACTION_MACRO = """
 {% macro bottle_actions(b) %}
 <div class="action-row">
@@ -343,25 +446,116 @@ _ACTION_MACRO = """
 {% endmacro %}
 """
 
+LANDING_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a0f08">
+<title>Love My Bourbons</title>
+<style>""" + BASE_CSS + """</style>
+</head>
+<body>
+<div class="container">
+  <div class="hero">
+    <h1>Love My Bourbons</h1>
+    <div class="tagline">Track your whiskey collection &middot; know what it's worth.</div>
+    <div class="cta">
+      {% if authenticated %}
+        <a class="primary" href="{{ url_for('collection') }}">My Collection</a>
+        <a class="ghost" href="{{ url_for('logout') }}">Log out</a>
+      {% else %}
+        <a class="primary" href="{{ url_for('login') }}">Log in</a>
+        <a class="ghost" href="{{ url_for('signup') }}">Sign up</a>
+      {% endif %}
+    </div>
+  </div>
+  <footer>A private beta &middot; invite only</footer>
+</div>
+</body>
+</html>"""
+
+LOGIN_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a0f08">
+<title>Log in &middot; Love My Bourbons</title>
+<style>""" + BASE_CSS + """</style>
+</head>
+<body>
+<div class="container">
+  <header><h1>Love My Bourbons</h1></header>
+  <div class="auth-card">
+    <h2>Log in</h2>
+    <div class="auth-sub">Your collection is waiting.</div>
+    {% for m in flashes %}<div class="banner">{{ m }}</div>{% endfor %}
+    {% if error %}<div class="banner">{{ error }}</div>{% endif %}
+    <form method="post" action="{{ url_for('login') }}">
+      <label class="fld">Email</label>
+      <input type="email" name="email" autocomplete="username" required autofocus>
+      <label class="fld">Password</label>
+      <input type="password" name="password" autocomplete="current-password" required>
+      <button type="submit" class="btn-primary">Log in</button>
+    </form>
+    <div class="auth-alt">Have an invite code? <a href="{{ url_for('signup') }}">Sign up</a></div>
+  </div>
+</div>
+</body>
+</html>"""
+
+SIGNUP_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a0f08">
+<title>Sign up &middot; Love My Bourbons</title>
+<style>""" + BASE_CSS + """</style>
+</head>
+<body>
+<div class="container">
+  <header><h1>Love My Bourbons</h1></header>
+  <div class="auth-card">
+    <h2>Create account</h2>
+    <div class="auth-sub">Invite only during the beta.</div>
+    {% if error %}<div class="banner">{{ error }}</div>{% endif %}
+    <form method="post" action="{{ url_for('signup') }}">
+      <label class="fld">Invite code</label>
+      <input type="text" name="invite_code" autocomplete="off" required autofocus>
+      <label class="fld">Email</label>
+      <input type="email" name="email" autocomplete="username" required>
+      <label class="fld">Password (min 8 chars)</label>
+      <input type="password" name="password" autocomplete="new-password" required>
+      <button type="submit" class="btn-primary">Sign up</button>
+    </form>
+    <div class="auth-alt">Already have an account? <a href="{{ url_for('login') }}">Log in</a></div>
+  </div>
+</div>
+</body>
+</html>"""
+
 INDEX_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1a0f08">
-<title>Bourbon Hunter · Editor</title>
+<title>Bourbon Hunter · Collection</title>
 <style>""" + BASE_CSS + """</style>
 </head>
 <body>
 <div class="container">
   <header>
-    <h1>Bourbon Hunter</h1>
-    <div class="subtitle">Collection Editor</div>
+    <h1>Love My Bourbons</h1>
+    <div class="subtitle">{{ user_email }}</div>
   </header>
 
   <nav class="nav">
-    <a href="{{ url_for('index') }}" class="active">Bottles</a>
+    <a href="{{ url_for('collection') }}" class="active">Bottles</a>
     <a href="{{ url_for('urls') }}">URL Tool</a>
+    <a href="{{ url_for('logout') }}">Log out</a>
   </nav>
 
   {% if error %}<div class="banner">{{ error }}</div>{% endif %}
@@ -433,7 +627,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   {% endfor %}
   {% endfor %}
 
-  <footer>Local editor &middot; writes only to the bottles table &middot; price history is read-only</footer>
+  <footer>Your collection &middot; private to your account</footer>
 </div>
 
 <script>
@@ -470,12 +664,13 @@ URLS_TEMPLATE = """<!DOCTYPE html>
 <body>
 <div class="container">
   <header>
-    <h1>Bourbon Hunter</h1>
+    <h1>Love My Bourbons</h1>
     <div class="subtitle">Bulk URL Tool</div>
   </header>
   <nav class="nav">
-    <a href="{{ url_for('index') }}">Bottles</a>
+    <a href="{{ url_for('collection') }}">Bottles</a>
     <a href="{{ url_for('urls') }}" class="active">URL Tool</a>
+    <a href="{{ url_for('logout') }}">Log out</a>
   </nav>
   {% if not bottles %}
     <div class="empty">No active bottles yet.</div>
@@ -504,8 +699,7 @@ URLS_TEMPLATE = """<!DOCTYPE html>
 
 if __name__ == "__main__":
     print("=" * 56)
-    print("  Bourbon Hunter — Collection Editor")
-    print(f"  Open on your phone:  http://{TAILSCALE_IP}:{PORT}")
-    print(f"  (binding 0.0.0.0:{PORT} — independent of Tailscale state)")
+    print("  Love My Bourbons — dev server")
+    print(f"  http://127.0.0.1:{PORT}  (binding 0.0.0.0)")
     print("=" * 56)
     app.run(host=BIND_HOST, port=PORT, debug=False)

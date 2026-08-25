@@ -192,7 +192,8 @@ def process_bottle(bottle, timestamp):
 
 
 def main():
-    bottles = db.get_active_bottles()
+    # Pricing is owner-agnostic: price EVERY user's active bottles (unscoped).
+    bottles = db.get_all_active_for_pricing()
 
     timestamp = datetime.now().isoformat(timespec="seconds")
     print(f"Loaded {len(bottles)} active bottles from the database")

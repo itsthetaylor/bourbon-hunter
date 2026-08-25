@@ -403,12 +403,21 @@ def _resolve_slug(base_slug, proof, batch, existing_ids):
     return prefix + "_" + uuid.uuid4().hex[:8]
 
 
-def add_bottle(bottle_data):
-    """Insert one identified bottle into the DB (atomic, via db.insert_bottle).
+def owner_user_id():
+    """The account new intake bottles are assigned to — the admin/owner. Returns
+    None if no account exists yet (caller should tell the user to sign up first).
+    Multi-user note: batch intake currently assigns to the owner; per-user intake
+    would pass an explicit user_id here later."""
+    return db.get_admin_user_id()
+
+
+def add_bottle(bottle_data, user_id):
+    """Insert one identified bottle into the DB, owned by user_id (atomic).
 
     Returns (bottle_id, status) where status is 'added' or 'no_name'.
-    Slug collisions are resolved by _resolve_slug against the DB's existing ids —
-    a discriminator (proof, batch, or UUID fragment) is appended only when the
+    Slug collisions are resolved by _resolve_slug against the DB's existing ids
+    (bottle_id is a GLOBAL primary key, so collisions are checked across all users)
+    — a discriminator (proof, batch, or UUID fragment) is appended only when the
     base name slug already exists, so unique bottles keep clean ids.
     """
     name = (bottle_data.get("name") or "").strip()
@@ -423,6 +432,7 @@ def add_bottle(bottle_data):
 
     db.insert_bottle(
         bottle_id=bottle_id,
+        user_id=user_id,
         product_key=make_product_key(name, proof, batch),
         name=name,
         proof=proof,

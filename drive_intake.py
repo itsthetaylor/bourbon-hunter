@@ -179,6 +179,11 @@ def main():
         print("Aborted — nothing written.")
         return
 
+    owner_id = core.owner_user_id()
+    if owner_id is None:
+        print("No account exists yet. Create your account in the app first, then re-run intake.")
+        return
+
     for i, group in enumerate(groups, 1):
         keys = ", ".join(p["key"] for p in group)
         print(f"\nBottle {i}: {keys}")
@@ -197,7 +202,7 @@ def main():
 
         core.print_result(result)
 
-        bottle_id, status = core.add_bottle(result)
+        bottle_id, status = core.add_bottle(result, owner_id)
         if status == "duplicate":
             print(f"  Already in collection (id: {bottle_id}) — skipped")
         elif status == "no_name":

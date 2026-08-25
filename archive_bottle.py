@@ -1,42 +1,32 @@
 """
-Archive a bottle (consumed / sold).
+Archive a bottle (consumed / sold) — owner CLI.
 
-Two ways in, ONE code path:
-  * archive_bottle(bottle_id, status, sale_price)  ← importable core. Delegates to
-    db.set_status(). (The Flask app calls db.set_status() directly; this wrapper
-    stays for the CLI below and any other importer.)
-  * `python archive_bottle.py`  ← interactive CLI: lists the active bottles from
-    the DB, asks status + sale price, and writes through db.set_status().
+  * archive_bottle(bottle_id, status, user_id, sale_price)  ← importable wrapper,
+    delegates to db.set_status() (which enforces that the bottle belongs to user_id).
+  * `python archive_bottle.py`  ← interactive CLI: lists the OWNER's active bottles,
+    asks status + sale price, and writes through db.set_status().
 
-All reads/writes go through db.py (SQLite at data/bourbon.db). Nothing here
-touches bottles.csv anymore — that file lives only as data/bottles.csv.bak.
+All reads/writes go through db.py (Postgres). Every operation is scoped to a user
+id; the CLI uses the admin/owner account.
 """
 
 import db
 
-# Archivable target states. The DB CHECK also allows 'active', but from here you
-# only ever transition INTO these two. Kept as a module constant for any importer.
 VALID_STATUSES = list(db.ARCHIVE_STATUSES)
 
 
-def archive_bottle(bottle_id, status, sale_price=None):
-    """Mark a bottle consumed or sold (delegates to db.set_status).
-
-    status     'consumed' or 'sold'
-    sale_price required when status == 'sold'; ignored otherwise
-
-    Stamps date_resolved = today (in db). Returns the updated bottle dict.
-    Raises ValueError on bad status, missing/invalid sale price, or unknown id.
-    """
-    return db.set_status(bottle_id, status, sale_price)
+def archive_bottle(bottle_id, status, user_id, sale_price=None):
+    """Mark one of user_id's bottles consumed or sold (delegates to db.set_status).
+    Raises ValueError on bad status/sale price, or if the bottle isn't owned by
+    user_id."""
+    return db.set_status(bottle_id, status, user_id, sale_price)
 
 
 # --------------------------------------------------------------------------- #
-# Interactive CLI — collects input and delegates to archive_bottle() / db.
+# Interactive CLI
 # --------------------------------------------------------------------------- #
 
 def prompt_choice(prompt, options):
-    """Display numbered list, return the chosen item."""
     for i, opt in enumerate(options, 1):
         print(f"  {i}. {opt}")
     while True:
@@ -54,7 +44,12 @@ def prompt_choice(prompt, options):
 
 
 def main():
-    active = db.get_active_bottles()
+    owner_id = db.get_admin_user_id()
+    if owner_id is None:
+        print("No account exists yet. Create your account in the app first.")
+        return
+
+    active = db.get_active_bottles(owner_id)
     if not active:
         print("No active bottles to archive.")
         return
@@ -82,7 +77,7 @@ def main():
             except ValueError:
                 print("  Enter a dollar amount.")
 
-    updated = archive_bottle(chosen["bottle_id"], new_status, sale_price)
+    updated = archive_bottle(chosen["bottle_id"], new_status, owner_id, sale_price)
 
     print()
     print(f"  Archived {updated['bottle_id']} as {updated['status']}")

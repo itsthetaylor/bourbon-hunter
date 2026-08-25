@@ -6,7 +6,9 @@ certifi==2026.4.22
 charset-normalizer==3.4.7
 distro==1.9.0
 docstring_parser==0.18.0
+bcrypt==5.0.0
 flask==3.1.0
+flask-login==0.6.3
 gunicorn==23.0.0
 google-api-python-client==2.196.0
 google-auth==2.52.0

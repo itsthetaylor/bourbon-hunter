@@ -1,32 +1,30 @@
 """
-db.py — single access point for the data layer.
+db.py — single access point for the data layer (PostgreSQL).
 
-BACKEND: PostgreSQL (Week 1 multi-user foundation). The connection string comes
-ONLY from the DATABASE_URL environment variable (loaded from .env) — it contains
-a password and must never be hardcoded or committed. See .env.example.
+BACKEND: PostgreSQL. The connection string comes ONLY from the DATABASE_URL
+environment variable (loaded from .env) — it holds a password and must never be
+hardcoded or committed. See .env.example.
 
-The previous SQLite file (data/bourbon.db) is kept as a fallback until Postgres
-is proven over several runs; migrate_sqlite_to_pg.py loads it into Postgres.
+MULTI-USER ISOLATION (critical):
+  Every bottle belongs to exactly one user (bottles.user_id -> users.id). All the
+  per-user bottle accessors below take a REQUIRED user_id and filter on it — reads
+  with `WHERE user_id=%s`, writes with `WHERE bottle_id=%s AND user_id=%s` so a
+  forged bottle_id from another user simply matches zero rows. A user can never
+  read or modify another user's bottles through these functions.
 
-COMPATIBILITY CONTRACT (why reads return strings):
-  Templates and pricing math downstream were written against CSV rows, where every
-  value is a string and blanks are "". So the read helpers here return rows shaped
-  EXACTLY like the old csv.DictReader output: all values are strings, SQL NULL
-  becomes "", and money columns are formatted "%.2f". Downstream code is unchanged.
-  Storage is typed (DOUBLE PRECISION / INTEGER / NULL); only the presentation back
-  to old consumers is stringified.
+  The ONLY unscoped bottle accessors are batch/system helpers, named explicitly:
+    * get_all_active_for_pricing()  — the pricing pipeline prices everyone's
+      bottles (market value is owner-agnostic).
+    * get_bottle_ids()             — global PK-collision check for intake slugs.
+  These never return data to a user-facing request path.
+
+COMPATIBILITY CONTRACT (why bottle reads return strings):
+  Templates/pricing math were written against CSV rows (all values strings, blanks
+  ""). The bottle/history read helpers return that same shape. User rows are NOT
+  stringified — they are typed dicts consumed by auth.py.
 
 ATOMICITY:
-  Each write is a single Postgres transaction (commit()/implicit rollback on error)
-  — the engine guarantees all-or-nothing, replacing the old temp-file + os.replace
-  pattern the CSV layer used.
-
-ORDERING NOTE:
-  SQLite had an implicit rowid we ordered bottles by (original acquisition order).
-  Postgres has no rowid, so bottles carry an explicit `seq SERIAL` surrogate that
-  preserves that order: the migration seeds it from SQLite's rowid order, and new
-  intake rows auto-increment onto the end. Reads ORDER BY seq. `seq` is internal
-  ordering only — it is not exposed in the CSV-shaped dicts returned to consumers.
+  Each write is a single Postgres transaction (commit / implicit rollback on error).
 """
 
 import os
@@ -45,14 +43,20 @@ if not DATABASE_URL:
         "connection string (it holds the DB password; never hardcode it)."
     )
 
-# Postgres schema — matches the SQLite schema exactly: same columns, TEXT for text,
-# DOUBLE PRECISION for the money/float columns (bit-identical to SQLite's REAL, so
-# values don't drift), INTEGER for the count, SERIAL for the auto-increment id, the
-# status CHECK constraint, and the price_history.bottle_id -> bottles FK.
+# Schema. `users` is created before `bottles` because bottles.user_id references it.
 PG_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id            SERIAL PRIMARY KEY,
+    email         TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    is_admin      BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS bottles (
     bottle_id        TEXT PRIMARY KEY,
     seq              SERIAL,
+    user_id          INTEGER REFERENCES users(id),
     product_key      TEXT,
     name             TEXT,
     proof            TEXT,
@@ -87,8 +91,6 @@ CREATE TABLE IF NOT EXISTS price_history (
 );
 """
 
-# Targets the Flask archive buttons may set. The DB CHECK also allows 'active',
-# but you only ever transition INTO these two from the UI.
 ARCHIVE_STATUSES = ("consumed", "sold")
 
 _MONEY_COLS = {"paid", "msrp", "sale_price"}
@@ -103,10 +105,7 @@ _UPDATABLE = _MONEY_COLS | {
 # --------------------------------------------------------------------------- #
 
 def connect():
-    """Open a Postgres connection whose cursors yield dict-like rows.
-
-    Foreign keys are enforced natively by Postgres (no PRAGMA needed).
-    """
+    """Open a Postgres connection whose cursors yield dict-like rows."""
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
@@ -122,11 +121,10 @@ def init_db():
 
 
 # --------------------------------------------------------------------------- #
-# Stringify helpers — reproduce the old CSV dict shape for downstream consumers
+# Stringify helpers — reproduce the old CSV dict shape for bottle/history consumers
 # --------------------------------------------------------------------------- #
 
 def _money(v):
-    """number -> '%.2f' string; NULL -> '' (matches the old CSV cells)."""
     return f"{v:.2f}" if v is not None else ""
 
 
@@ -173,7 +171,6 @@ def _history_dict(row):
 
 
 def _to_money(v):
-    """Form/string value -> float, or None for blank. Raises ValueError on junk."""
     if v is None:
         return None
     s = str(v).strip()
@@ -183,26 +180,177 @@ def _to_money(v):
 
 
 def _blank_to_none(v):
-    """Text value -> itself, or None for blank/whitespace-only (stores NULL)."""
     return v if (v is not None and str(v).strip() != "") else None
 
 
 # --------------------------------------------------------------------------- #
-# Reads (return CSV-shaped dicts)
+# Users
 # --------------------------------------------------------------------------- #
 
-def get_all_bottles():
+def create_user(email, password_hash, is_admin=False):
+    """Insert a user. `password_hash` must already be a bcrypt hash (never a
+    plaintext password). Returns the new user id. Raises ValueError on a duplicate
+    email."""
+    email = (email or "").strip().lower()
+    if not email:
+        raise ValueError("email is required")
+    if not password_hash:
+        raise ValueError("password_hash is required")
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM bottles ORDER BY seq")
+            cur.execute(
+                "INSERT INTO users (email, password_hash, is_admin) "
+                "VALUES (%s, %s, %s) RETURNING id",
+                (email, password_hash, is_admin),
+            )
+            new_id = cur.fetchone()["id"]
+        conn.commit()
+        return new_id
+    except psycopg2.IntegrityError:
+        raise ValueError(f"an account already exists for {email!r}")
+    finally:
+        conn.close()
+
+
+def get_user_by_email(email):
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, email, password_hash, is_admin FROM users WHERE email=%s",
+                ((email or "").strip().lower(),),
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def get_user_by_id(user_id):
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, email, password_hash, is_admin FROM users WHERE id=%s",
+                (user_id,),
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def count_users():
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM users")
+            return cur.fetchone()["n"]
+    finally:
+        conn.close()
+
+
+def get_admin_user_id():
+    """First admin's id (owner), or None. Used by batch intake/CLI to assign owner."""
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE is_admin ORDER BY id LIMIT 1")
+            r = cur.fetchone()
+            return r["id"] if r else None
+    finally:
+        conn.close()
+
+
+def assign_orphans_to(user_id):
+    """Assign every bottle with no owner (user_id IS NULL) to user_id. One-time,
+    for importing the pre-accounts collection. Returns the number assigned."""
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE bottles SET user_id=%s WHERE user_id IS NULL", (user_id,))
+            n = cur.rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Bottle reads — PER-USER (required user_id)
+# --------------------------------------------------------------------------- #
+
+def get_all_bottles(user_id):
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM bottles WHERE user_id=%s ORDER BY seq", (user_id,))
             rows = cur.fetchall()
     finally:
         conn.close()
     return [_bottle_dict(r) for r in rows]
 
 
-def get_active_bottles():
+def get_active_bottles(user_id):
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM bottles WHERE user_id=%s AND status='active' ORDER BY seq",
+                (user_id,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [_bottle_dict(r) for r in rows]
+
+
+def get_bottle(bottle_id, user_id):
+    """One bottle, ONLY if it belongs to user_id (else None)."""
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM bottles WHERE bottle_id=%s AND user_id=%s",
+                (bottle_id, user_id),
+            )
+            r = cur.fetchone()
+    finally:
+        conn.close()
+    return _bottle_dict(r) if r else None
+
+
+def latest_market_values(user_id):
+    """{bottle_id: latest price_history row (CSV-shaped)} for THIS user's bottles."""
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ph.* FROM price_history ph "
+                "JOIN bottles b ON b.bottle_id = ph.bottle_id "
+                "WHERE b.user_id = %s ORDER BY ph.id",
+                (user_id,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    latest = {}
+    for row in rows:
+        d = _history_dict(row)
+        bid = d["bottle_id"]
+        if not bid:
+            continue
+        if bid not in latest or d["timestamp"] > latest[bid]["timestamp"]:
+            latest[bid] = d
+    return latest
+
+
+# --------------------------------------------------------------------------- #
+# Bottle reads — UNSCOPED batch/system helpers (never a user request path)
+# --------------------------------------------------------------------------- #
+
+def get_all_active_for_pricing():
+    """ALL users' active bottles — for the pricing pipeline only (market value is
+    owner-agnostic). Never use this to answer a logged-in user's request."""
     conn = connect()
     try:
         with conn.cursor() as cur:
@@ -213,19 +361,9 @@ def get_active_bottles():
     return [_bottle_dict(r) for r in rows]
 
 
-def get_bottle(bottle_id):
-    conn = connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM bottles WHERE bottle_id=%s", (bottle_id,))
-            r = cur.fetchone()
-    finally:
-        conn.close()
-    return _bottle_dict(r) if r else None
-
-
 def get_bottle_ids():
-    """Set of all existing bottle_ids — used by intake for slug-collision checks."""
+    """Set of ALL bottle_ids (global) — intake slug-collision check only. bottle_id
+    is the global PK, so uniqueness must be checked across every user."""
     conn = connect()
     try:
         with conn.cursor() as cur:
@@ -236,31 +374,8 @@ def get_bottle_ids():
     return {r["bottle_id"] for r in rows}
 
 
-def get_all_history():
-    conn = connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM price_history ORDER BY id")
-            rows = cur.fetchall()
-    finally:
-        conn.close()
-    return [_history_dict(r) for r in rows]
-
-
-def latest_market_values():
-    """{bottle_id: latest price_history row (CSV-shaped)} by newest timestamp."""
-    latest = {}
-    for row in get_all_history():
-        bid = row["bottle_id"]
-        if not bid:
-            continue
-        if bid not in latest or row["timestamp"] > latest[bid]["timestamp"]:
-            latest[bid] = row
-    return latest
-
-
 # --------------------------------------------------------------------------- #
-# Writes (single transaction each = atomic)
+# Bottle writes — PER-USER (required user_id)
 # --------------------------------------------------------------------------- #
 
 def append_price_history(*, timestamp, bottle_id,
@@ -269,7 +384,7 @@ def append_price_history(*, timestamp, bottle_id,
                          market_value=None, sources_count=None,
                          msrp=None, paid=None,
                          gain_loss_dollar=None, gain_loss_pct=None):
-    """Insert one price snapshot. Values are native types (float/int/None)."""
+    """Insert one price snapshot (pipeline; keyed to a bottle, owner-agnostic)."""
     conn = connect()
     try:
         with conn.cursor() as cur:
@@ -288,25 +403,22 @@ def append_price_history(*, timestamp, bottle_id,
         conn.close()
 
 
-def insert_bottle(*, bottle_id, name, product_key=None, proof=None, batch=None,
-                  bottle_code=None, paid=None, msrp=None, status="active",
-                  sale_price=None, date_acquired=None, date_resolved=None,
-                  wooden_cork_url=None, bbb_url=None, barrel_tap_url=None,
-                  keg_n_bottle_url=None):
-    """Insert a brand-new bottle — the photo-intake write path.
-
-    Money columns (paid, msrp, sale_price) coerce to float/NULL; blank text -> NULL.
-    Single INSERT (atomic). Returns the inserted bottle (CSV-shaped). Raises
-    ValueError on a missing name, a duplicate bottle_id, a bad status, or a bad
-    money value.
-    """
+def insert_bottle(*, bottle_id, name, user_id, product_key=None, proof=None,
+                  batch=None, bottle_code=None, paid=None, msrp=None,
+                  status="active", sale_price=None, date_acquired=None,
+                  date_resolved=None, wooden_cork_url=None, bbb_url=None,
+                  barrel_tap_url=None, keg_n_bottle_url=None):
+    """Insert a brand-new bottle owned by user_id (the photo-intake write path)."""
     if not bottle_id:
         raise ValueError("bottle_id is required")
     if not name or str(name).strip() == "":
         raise ValueError("name is required")
+    if not user_id:
+        raise ValueError("user_id is required — every bottle must have an owner")
 
     row = {
         "bottle_id":        bottle_id,
+        "user_id":          user_id,
         "product_key":      _blank_to_none(product_key),
         "name":             name,
         "proof":            _blank_to_none(proof),
@@ -334,20 +446,16 @@ def insert_bottle(*, bottle_id, name, product_key=None, proof=None, batch=None,
             )
         conn.commit()
     except psycopg2.IntegrityError as e:
-        # duplicate PK or CHECK(status) violation
         raise ValueError(f"could not insert bottle {bottle_id!r}: {e}")
     finally:
         conn.close()
-    return get_bottle(bottle_id)
+    return get_bottle(bottle_id, user_id)
 
 
-def update_bottle_fields(bottle_id, fields):
-    """Update arbitrary editable columns for one bottle (the Flask Edit pane).
-
-    `fields` maps column -> raw value (form string ok). Money columns are coerced
-    to float/None; text/url columns store None for blank. Raises ValueError on an
-    unknown column, a bad money value, or an unknown bottle_id.
-    """
+def update_bottle_fields(bottle_id, fields, user_id):
+    """Update editable columns for one bottle, ONLY if it belongs to user_id.
+    Raises ValueError on an unknown column, a bad money value, or if the bottle is
+    not owned by user_id (0 rows matched)."""
     sets, vals = [], []
     for col, v in fields.items():
         if col not in _UPDATABLE:
@@ -360,27 +468,26 @@ def update_bottle_fields(bottle_id, fields):
         vals.append(v)
     if not sets:
         return
-    vals.append(bottle_id)
+    vals.extend([bottle_id, user_id])
     conn = connect()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"UPDATE bottles SET {', '.join(sets)} WHERE bottle_id=%s", vals
+                f"UPDATE bottles SET {', '.join(sets)} "
+                f"WHERE bottle_id=%s AND user_id=%s", vals
             )
             affected = cur.rowcount
         conn.commit()
         if affected == 0:
-            raise ValueError(f"no bottle with bottle_id {bottle_id!r}")
+            raise ValueError(f"no bottle {bottle_id!r} owned by this user")
     finally:
         conn.close()
 
 
-def set_status(bottle_id, status, sale_price=None):
-    """Archive a bottle as 'consumed' or 'sold' (mirrors the old archive_bottle()).
-
-    Stamps date_resolved = today. sale_price required (and stored) only for 'sold';
-    a consumed bottle gets sale_price = NULL. Returns the updated bottle (CSV-shaped).
-    """
+def set_status(bottle_id, status, user_id, sale_price=None):
+    """Archive a bottle as 'consumed'/'sold', ONLY if it belongs to user_id.
+    Stamps date_resolved = today. Returns the updated bottle, or raises ValueError
+    if the bottle is not owned by user_id."""
     status = (status or "").strip()
     if status not in ARCHIVE_STATUSES:
         raise ValueError(f"status must be one of {ARCHIVE_STATUSES}, got {status!r}")
@@ -399,13 +506,13 @@ def set_status(bottle_id, status, sale_price=None):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE bottles SET status=%s, date_resolved=%s, sale_price=%s "
-                "WHERE bottle_id=%s",
-                (status, date.today().isoformat(), sale, bottle_id),
+                "WHERE bottle_id=%s AND user_id=%s",
+                (status, date.today().isoformat(), sale, bottle_id, user_id),
             )
             affected = cur.rowcount
         conn.commit()
         if affected == 0:
-            raise ValueError(f"no bottle with bottle_id {bottle_id!r}")
+            raise ValueError(f"no bottle {bottle_id!r} owned by this user")
     finally:
         conn.close()
-    return get_bottle(bottle_id)
+    return get_bottle(bottle_id, user_id)
