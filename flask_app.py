@@ -392,20 +392,65 @@ button {
 .bottle-unit { padding: 10px 0 4px; border-top: 1px solid rgba(212,165,116,.08); }
 .unit-meta { color: #a08770; font-size: 12px; margin-bottom: 8px; }
 footer { text-align: center; color: #6b5544; font-size: 11px; padding: 20px 0; }
-/* Landing + auth */
-.hero { text-align: center; padding: 56px 20px 28px; }
-.hero h1 { font-size: 40px; }
-.tagline { color: #c9b896; font-size: 16px; margin: 14px 0 32px; font-style: italic; }
-.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-.cta a { text-decoration: none; padding: 14px 26px; border-radius: 12px; font-weight: 700; font-size: 15px; }
-.cta .primary { background: #5a3318; color: #f4e4c1; border: 1px solid rgba(212,165,116,.5); }
-.cta .ghost { background: rgba(45,26,14,.6); color: #d4a574; border: 1px solid rgba(212,165,116,.35); }
-.auth-card { max-width: 380px; margin: 40px auto; background: linear-gradient(135deg, rgba(30,18,10,.92), rgba(45,26,14,.88));
-  border: 1px solid rgba(212,165,116,.2); border-radius: 16px; padding: 28px 24px; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
-.auth-card h2 { font-family: Georgia, serif; color: #d4a574; font-size: 22px; text-align: center; margin-bottom: 6px; }
-.auth-sub { text-align: center; color: #a08770; font-size: 13px; margin-bottom: 20px; }
-.auth-alt { text-align: center; margin-top: 16px; font-size: 13px; color: #a08770; }
-.auth-alt a { color: #d4a574; }
+"""
+
+
+# Premium, invitation-only aesthetic for the PUBLIC pages (landing / login / signup).
+# Cormorant Garamond (loaded via <link> in each template head) for the display type.
+PREMIUM_CSS = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background:
+    radial-gradient(1100px 560px at 50% -12%, rgba(201,165,104,.12), transparent 60%),
+    radial-gradient(900px 700px at 50% 120%, rgba(201,165,104,.05), transparent 55%),
+    #0b0705;
+  color: #e8dcc8; min-height: 100vh; line-height: 1.65;
+  display: flex; align-items: center; justify-content: center; padding: 40px 22px;
+  -webkit-font-smoothing: antialiased;
+}
+.frame { width: 100%; max-width: 560px; text-align: center; }
+.overline { font-size: 12px; letter-spacing: 6px; text-transform: uppercase; color: #c9a568; font-weight: 600; }
+.wordmark {
+  font-family: "Cormorant Garamond", Georgia, serif; font-weight: 600;
+  font-size: 64px; line-height: 1.04; color: #f4e9d4; letter-spacing: .5px; margin-top: 16px;
+  text-shadow: 0 2px 24px rgba(0,0,0,.5);
+}
+.rule { width: 62px; height: 1px; background: linear-gradient(90deg, transparent, #c9a568, transparent);
+  margin: 28px auto; position: relative; }
+.rule::after { content: "\\25C6"; position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
+  color: #c9a568; font-size: 10px; background: #0b0705; padding: 0 9px; }
+.lead { font-family: "Cormorant Garamond", Georgia, serif; font-style: italic; font-size: 23px;
+  color: #ddc9a6; margin-bottom: 12px; }
+.sub { font-size: 15px; color: #9a8a72; max-width: 430px; margin: 0 auto 34px; }
+.cta {
+  display: inline-block; text-decoration: none; font-size: 12.5px; letter-spacing: 2.5px;
+  text-transform: uppercase; font-weight: 700; color: #0b0705;
+  background: linear-gradient(180deg, #e9d3a3, #c9a568);
+  padding: 17px 36px; border-radius: 2px; box-shadow: 0 10px 34px rgba(201,165,104,.20);
+}
+.cta:hover { filter: brightness(1.06); }
+.secondary { display: block; margin-top: 22px; font-size: 13px; letter-spacing: .4px; color: #9a8a72; }
+.secondary a { color: #c9a568; text-decoration: none; border-bottom: 1px solid rgba(201,165,104,.4); padding-bottom: 1px; }
+.footnote { margin-top: 48px; font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase; color: #6b5c46; }
+.card { margin: 28px auto 0; max-width: 400px; text-align: left; background: rgba(20,14,9,.6);
+  border: 1px solid rgba(201,165,104,.18); border-radius: 6px; padding: 26px 24px;
+  box-shadow: 0 22px 60px rgba(0,0,0,.5); }
+.card .fld { display: block; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+  color: #9a8a72; margin: 14px 0 6px; font-weight: 600; }
+.card .fld:first-child { margin-top: 0; }
+.card input { width: 100%; background: #0b0705; color: #e8dcc8; border: 1px solid rgba(201,165,104,.25);
+  border-radius: 4px; padding: 13px 12px; font-size: 16px; -webkit-appearance: none; }
+.card input:focus { outline: none; border-color: #c9a568; }
+.btn { width: 100%; margin-top: 24px; border: none; cursor: pointer; font-size: 12.5px; letter-spacing: 2px;
+  text-transform: uppercase; font-weight: 700; color: #0b0705;
+  background: linear-gradient(180deg, #e9d3a3, #c9a568); padding: 16px; border-radius: 3px; }
+.btn:hover { filter: brightness(1.06); }
+.banner { background: rgba(90,30,30,.55); border: 1px solid rgba(232,134,134,.5); color: #f3c9c9;
+  border-radius: 4px; padding: 11px 13px; margin-bottom: 6px; font-size: 13px; }
+.alt { text-align: center; margin-top: 18px; font-size: 13px; color: #9a8a72; }
+.alt a { color: #c9a568; }
+@media (max-width: 480px) { .wordmark { font-size: 46px; } .lead { font-size: 20px; } }
 """
 
 _ACTION_MACRO = """
@@ -451,27 +496,29 @@ LANDING_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1a0f08">
+<meta name="theme-color" content="#0b0705">
 <title>Love My Bourbons</title>
-<style>""" + BASE_CSS + """</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+<style>""" + PREMIUM_CSS + """</style>
 </head>
 <body>
-<div class="container">
-  <div class="hero">
-    <h1>Love My Bourbons</h1>
-    <div class="tagline">Track your whiskey collection &middot; know what it's worth.</div>
-    <div class="cta">
-      {% if authenticated %}
-        <a class="primary" href="{{ url_for('collection') }}">My Collection</a>
-        <a class="ghost" href="{{ url_for('logout') }}">Log out</a>
-      {% else %}
-        <a class="primary" href="{{ url_for('login') }}">Log in</a>
-        <a class="ghost" href="{{ url_for('signup') }}">Sign up</a>
-      {% endif %}
-    </div>
+  <div class="frame">
+    <div class="overline">Coming Soon</div>
+    <h1 class="wordmark">Love My Bourbons</h1>
+    <div class="rule"></div>
+    <p class="lead">An invitation-only experience for a select few collectors.</p>
+    <p class="sub">A private cellar for the bottles you treasure &mdash; and a quiet ledger of what they're worth.</p>
+    {% if authenticated %}
+      <a class="cta" href="{{ url_for('collection') }}">Enter your collection</a>
+      <span class="secondary"><a href="{{ url_for('logout') }}">Sign out</a></span>
+    {% else %}
+      <a class="cta" href="{{ url_for('signup') }}">For the selected few &mdash; enter your access code</a>
+      <span class="secondary">Already invited? <a href="{{ url_for('login') }}">Sign in</a></span>
+    {% endif %}
+    <div class="footnote">By invitation only</div>
   </div>
-  <footer>A private beta &middot; invite only</footer>
-</div>
 </body>
 </html>"""
 
@@ -480,28 +527,32 @@ LOGIN_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1a0f08">
-<title>Log in &middot; Love My Bourbons</title>
-<style>""" + BASE_CSS + """</style>
+<meta name="theme-color" content="#0b0705">
+<title>Sign in &middot; Love My Bourbons</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+<style>""" + PREMIUM_CSS + """</style>
 </head>
 <body>
-<div class="container">
-  <header><h1>Love My Bourbons</h1></header>
-  <div class="auth-card">
-    <h2>Log in</h2>
-    <div class="auth-sub">Your collection is waiting.</div>
-    {% for m in flashes %}<div class="banner">{{ m }}</div>{% endfor %}
-    {% if error %}<div class="banner">{{ error }}</div>{% endif %}
-    <form method="post" action="{{ url_for('login') }}">
-      <label class="fld">Email</label>
-      <input type="email" name="email" autocomplete="username" required autofocus>
-      <label class="fld">Password</label>
-      <input type="password" name="password" autocomplete="current-password" required>
-      <button type="submit" class="btn-primary">Log in</button>
-    </form>
-    <div class="auth-alt">Have an invite code? <a href="{{ url_for('signup') }}">Sign up</a></div>
+  <div class="frame">
+    <div class="overline">Members</div>
+    <h1 class="wordmark">Love My Bourbons</h1>
+    <div class="rule"></div>
+    <div class="card">
+      {% for m in flashes %}<div class="banner">{{ m }}</div>{% endfor %}
+      {% if error %}<div class="banner">{{ error }}</div>{% endif %}
+      <form method="post" action="{{ url_for('login') }}">
+        <label class="fld">Email</label>
+        <input type="email" name="email" autocomplete="username" required autofocus>
+        <label class="fld">Password</label>
+        <input type="password" name="password" autocomplete="current-password" required>
+        <button type="submit" class="btn">Sign in</button>
+      </form>
+      <div class="alt">Have an access code? <a href="{{ url_for('signup') }}">Claim your invitation</a></div>
+    </div>
+    <div class="footnote">By invitation only</div>
   </div>
-</div>
 </body>
 </html>"""
 
@@ -510,29 +561,35 @@ SIGNUP_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1a0f08">
-<title>Sign up &middot; Love My Bourbons</title>
-<style>""" + BASE_CSS + """</style>
+<meta name="theme-color" content="#0b0705">
+<title>You're Invited &middot; Love My Bourbons</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+<style>""" + PREMIUM_CSS + """</style>
 </head>
 <body>
-<div class="container">
-  <header><h1>Love My Bourbons</h1></header>
-  <div class="auth-card">
-    <h2>Create account</h2>
-    <div class="auth-sub">Invite only during the beta.</div>
-    {% if error %}<div class="banner">{{ error }}</div>{% endif %}
-    <form method="post" action="{{ url_for('signup') }}">
-      <label class="fld">Invite code</label>
-      <input type="text" name="invite_code" autocomplete="off" required autofocus>
-      <label class="fld">Email</label>
-      <input type="email" name="email" autocomplete="username" required>
-      <label class="fld">Password (min 8 chars)</label>
-      <input type="password" name="password" autocomplete="new-password" required>
-      <button type="submit" class="btn-primary">Sign up</button>
-    </form>
-    <div class="auth-alt">Already have an account? <a href="{{ url_for('login') }}">Log in</a></div>
+  <div class="frame">
+    <div class="overline">You've Been Selected</div>
+    <h1 class="wordmark">Congratulations</h1>
+    <div class="rule"></div>
+    <p class="lead">You're among the first collectors invited to Love My Bourbons.</p>
+    <p class="sub">A private cellar for your collection &mdash; and what it's worth. Claim your place below.</p>
+    <div class="card">
+      {% if error %}<div class="banner">{{ error }}</div>{% endif %}
+      <form method="post" action="{{ url_for('signup') }}">
+        <label class="fld">Access code</label>
+        <input type="text" name="invite_code" autocomplete="off" required autofocus>
+        <label class="fld">Email</label>
+        <input type="email" name="email" autocomplete="username" required>
+        <label class="fld">Password (min 8 characters)</label>
+        <input type="password" name="password" autocomplete="new-password" required>
+        <button type="submit" class="btn">Claim your place</button>
+      </form>
+      <div class="alt">Already a member? <a href="{{ url_for('login') }}">Sign in</a></div>
+    </div>
+    <div class="footnote">Love My Bourbons &middot; By invitation only</div>
   </div>
-</div>
 </body>
 </html>"""
 
