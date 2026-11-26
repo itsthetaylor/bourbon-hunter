@@ -208,6 +208,9 @@ def _str(v):
 def _bottle_dict(row):
     return {
         "bottle_id":        _str(row["bottle_id"]),
+        # Numeric, not stringified: seq is the DB's ordering key and callers
+        # sort and display it as a number.
+        "seq":              _int(row.get("seq")),
         "product_key":      _str(row["product_key"]),
         "name":             _str(row["name"]),
         "proof":            _str(row["proof"]),

@@ -126,13 +126,20 @@ def slugify(text):
     return text.strip("_")
 
 
-def make_product_key(name, proof, batch):
-    """Stable display-grouping label: name+proof+batch slug. Not a FK."""
+def make_product_key(name, proof, batch, volume_ml=None):
+    """Stable display-grouping label: name+proof+batch+volume slug. Not a FK.
+
+    Volume is always appended, not just for non-750ml bottles: the key stays
+    predictable and does not silently change meaning if DEFAULT_VOLUME_ML ever
+    does. Including it means a 750ml and a 1.75L of the same product get
+    different keys and so group as separate cards instead of collapsing into
+    one."""
     parts = [slugify(name)]
     if proof:
         parts.append(proof.replace(".", "_"))
     if batch:
         parts.append(slugify(batch))
+    parts.append(f"{db.normalize_volume_ml(volume_ml)}ml")
     return "_".join(p for p in parts if p)
 
 
@@ -484,12 +491,13 @@ def add_bottle(bottle_data, user_id):
 
     proof = _clean(bottle_data.get("proof"))
     batch = _clean(bottle_data.get("batch"))
+    volume_ml = parse_volume_ml(bottle_data.get("volume"))
     bottle_id = _resolve_slug(slugify(name), proof, batch, existing_ids)
 
     db.insert_bottle(
         bottle_id=bottle_id,
         user_id=user_id,
-        product_key=make_product_key(name, proof, batch),
+        product_key=make_product_key(name, proof, batch, volume_ml),
         name=name,
         proof=proof,
         batch=batch,
@@ -497,6 +505,6 @@ def add_bottle(bottle_data, user_id):
         msrp=_clean(bottle_data.get("msrp")),
         status="active",
         category=_clean(bottle_data.get("category")),
-        volume_ml=parse_volume_ml(bottle_data.get("volume")),
+        volume_ml=volume_ml,
     )
     return bottle_id, "added"
