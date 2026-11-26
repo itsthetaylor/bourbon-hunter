@@ -440,7 +440,9 @@ def bottle_label(b):
         bits.append(f"{proof} proof")
     batch = _clean(b.get("batch"))
     if batch:
-        bits.append(f"Batch {batch}")
+        # The prompt's examples ("Batch 25A") teach the model to include the
+        # word, so don't prefix it twice.
+        bits.append(batch if batch.lower().startswith("batch") else f"Batch {batch}")
     code = compose_bottle_code(b)
     if code:
         bits.append(code)
