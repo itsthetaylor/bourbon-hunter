@@ -71,7 +71,13 @@ CREATE TABLE IF NOT EXISTS bottles (
     wooden_cork_url  TEXT,
     bbb_url          TEXT,
     barrel_tap_url   TEXT,
-    keg_n_bottle_url TEXT
+    keg_n_bottle_url TEXT,
+    -- Appended last on purpose: in the live Railway DB these two arrived via
+    -- ALTER TABLE, so declaring them last keeps a fresh local DB's column
+    -- order identical to prod's.
+    category         TEXT NOT NULL DEFAULT 'bourbon'
+                     CHECK (category IN ('bourbon','spirit','wine')),
+    volume_ml        INTEGER NOT NULL DEFAULT 750
 );
 
 CREATE TABLE IF NOT EXISTS price_history (
@@ -91,12 +97,40 @@ CREATE TABLE IF NOT EXISTS price_history (
 );
 """
 
+# Additive migrations for databases that already exist. Every statement must be
+# safe to re-run against prod, where category/volume_ml were already added by
+# hand — ADD COLUMN IF NOT EXISTS is a no-op there. Postgres has no
+# ADD CONSTRAINT IF NOT EXISTS, so the CHECK is guarded by a catalog lookup on
+# the name Postgres gives an inline column CHECK (bottles_category_check),
+# which is exactly what the hand-run prod ALTER created.
+PG_MIGRATIONS_SQL = """
+ALTER TABLE bottles ADD COLUMN IF NOT EXISTS category  TEXT    NOT NULL DEFAULT 'bourbon';
+ALTER TABLE bottles ADD COLUMN IF NOT EXISTS volume_ml INTEGER NOT NULL DEFAULT 750;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'bottles_category_check'
+    ) THEN
+        ALTER TABLE bottles ADD CONSTRAINT bottles_category_check
+            CHECK (category IN ('bourbon','spirit','wine'));
+    END IF;
+END $$;
+"""
+
 ARCHIVE_STATUSES = ("consumed", "sold")
+
+# category/volume_ml are NOT NULL with defaults, so a blank from a form or the
+# vision step must fall back to the default here -- never be written as NULL.
+CATEGORIES = ("bourbon", "spirit", "wine")
+DEFAULT_CATEGORY = "bourbon"
+DEFAULT_VOLUME_ML = 750
 
 _MONEY_COLS = {"paid", "msrp", "sale_price"}
 _UPDATABLE = _MONEY_COLS | {
     "wooden_cork_url", "bbb_url", "barrel_tap_url", "keg_n_bottle_url",
     "product_key", "name", "proof", "batch", "bottle_code", "date_acquired",
+    "category", "volume_ml",
 }
 
 
@@ -115,6 +149,7 @@ def init_db():
     try:
         with conn.cursor() as cur:
             cur.execute(PG_SCHEMA_SQL)
+            cur.execute(PG_MIGRATIONS_SQL)
         conn.commit()
     finally:
         conn.close()
@@ -126,6 +161,44 @@ def init_db():
 
 def _money(v):
     return f"{v:.2f}" if v is not None else ""
+
+
+def _int(v):
+    """Integer for numeric columns the templates compare numerically (volume_ml).
+    Unlike _str/_money this does NOT stringify -- `volume_ml != 750` has to work
+    in Jinja."""
+    if v is None or str(v).strip() == "":
+        return None
+    try:
+        return int(float(str(v).strip()))
+    except ValueError:
+        return None
+
+
+def normalize_category(v):
+    """Coerce a form/vision value to a valid category. Blank or unrecognized ->
+    DEFAULT_CATEGORY, so the NOT NULL column never sees NULL and the CHECK
+    constraint is never the thing that reports a bad value."""
+    s = (str(v).strip().lower() if v is not None else "")
+    return s if s in CATEGORIES else DEFAULT_CATEGORY
+
+
+def format_volume(volume_ml):
+    """Display label for a millilitre volume: 1750 -> "1.75L", 750 -> "750ml".
+    Lives here (not in a view) so intake's confirmation output and the web
+    card render large formats identically."""
+    if not volume_ml:
+        return ""
+    if volume_ml >= 1000:
+        return f"{volume_ml / 1000.0:g}L"
+    return f"{volume_ml}ml"
+
+
+def normalize_volume_ml(v):
+    """Coerce a form/vision value to a positive int millilitre volume. Blank,
+    unparseable or <= 0 -> DEFAULT_VOLUME_ML (NOT NULL column)."""
+    n = _int(v)
+    return n if (n is not None and n > 0) else DEFAULT_VOLUME_ML
 
 
 def _str(v):
@@ -150,6 +223,8 @@ def _bottle_dict(row):
         "bbb_url":          _str(row["bbb_url"]),
         "barrel_tap_url":   _str(row["barrel_tap_url"]),
         "keg_n_bottle_url": _str(row["keg_n_bottle_url"]),
+        "category":         normalize_category(row.get("category")),
+        "volume_ml":        normalize_volume_ml(row.get("volume_ml")),
     }
 
 
@@ -407,7 +482,8 @@ def insert_bottle(*, bottle_id, name, user_id, product_key=None, proof=None,
                   batch=None, bottle_code=None, paid=None, msrp=None,
                   status="active", sale_price=None, date_acquired=None,
                   date_resolved=None, wooden_cork_url=None, bbb_url=None,
-                  barrel_tap_url=None, keg_n_bottle_url=None):
+                  barrel_tap_url=None, keg_n_bottle_url=None,
+                  category=None, volume_ml=None):
     """Insert a brand-new bottle owned by user_id (the photo-intake write path)."""
     if not bottle_id:
         raise ValueError("bottle_id is required")
@@ -434,6 +510,8 @@ def insert_bottle(*, bottle_id, name, user_id, product_key=None, proof=None,
         "bbb_url":          _blank_to_none(bbb_url),
         "barrel_tap_url":   _blank_to_none(barrel_tap_url),
         "keg_n_bottle_url": _blank_to_none(keg_n_bottle_url),
+        "category":         normalize_category(category),
+        "volume_ml":        normalize_volume_ml(volume_ml),
     }
     cols = list(row.keys())
     conn = connect()
@@ -462,6 +540,10 @@ def update_bottle_fields(bottle_id, fields, user_id):
             raise ValueError(f"field {col!r} is not updatable")
         if col in _MONEY_COLS:
             v = _to_money(v)
+        elif col == "category":
+            v = normalize_category(v)
+        elif col == "volume_ml":
+            v = normalize_volume_ml(v)
         else:
             v = v if (v is not None and str(v).strip() != "") else None
         sets.append(f"{col}=%s")

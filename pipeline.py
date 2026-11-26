@@ -123,6 +123,15 @@ def process_bottle(bottle, timestamp):
     print(f"\n{name}")
     print("=" * 60)
 
+    # Wine is out of scope for market value for now: all four scrapers target
+    # whiskey retailers/auction listings, so a wine lookup returns either
+    # nothing or an unrelated match. Skip before any HTTP call and write no
+    # price_history row, so a wine bottle has no misleading valuation rather
+    # than a wrong one.
+    if (bottle.get("category") or "bourbon").strip().lower() == "wine":
+        print("  Skipped: category 'wine' -- market-value sources are whiskey-only for now.")
+        return None
+
     # Source -> (price, label)
     sources = [
         ("Wooden Cork (retail)", get_price_wooden_cork(bottle.get("wooden_cork_url"))),

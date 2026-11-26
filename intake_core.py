@@ -69,7 +69,7 @@ _client = None  # lazily constructed so importing this module never needs an API
 # Vision prompt (STEP 4 — granular detail, empty-not-guessed)
 # --------------------------------------------------------------------------- #
 
-VISION_PROMPT = """You are identifying a single bourbon/whiskey bottle from one or more photos.
+VISION_PROMPT = """You are identifying a single bottle of bourbon, another spirit, or wine from one or more photos.
 
 The images you receive (there may be several) are ALL of the SAME bottle — typically
 the front label plus the bottle bottom and/or the back/neck label and any hand-written
@@ -82,6 +82,8 @@ bottles can be told apart later.
 
 Where to look:
 - Front label: product name, distillery, age statement, MSRP, proof.
+- Volume: usually printed small on the front label's lower edge or the back
+  label, as "750ml", "1L", "1.75L" or "375ml". Read it if it is legible.
 - Neck and back label: proof, batch, release/vintage, bottling info.
 - The BOTTLE BOTTOM and BACK: hand-written or stamped codes, store/dusty codes,
   fill or dump dates, lot/barrel numbers. These are often the ONLY way to tell two
@@ -102,6 +104,8 @@ Respond ONLY with valid JSON in this exact shape (no markdown, no extra text):
   "year": "Release year or vintage if shown, otherwise \\"\\"",
   "bottle_code": "Hand-written or stamped code, ESPECIALLY from the bottle bottom or back label — store/dusty code, fill/dump date, lot or barrel number, any stamped annotation. \\"\\" if none legible.",
   "msrp": "MSRP in USD as a number only, or \\"\\" if not shown",
+  "category": "EXACTLY one of \\"bourbon\\", \\"spirit\\", or \\"wine\\". Use \\"bourbon\\" for bourbon, rye and other American whiskey; \\"spirit\\" for any other distilled spirit (scotch, Irish, Japanese whisky, tequila, mezcal, rum, gin, vodka, cognac, liqueur); \\"wine\\" for still or sparkling wine, champagne, port, madeira and sherry. If you genuinely cannot tell, use \\"bourbon\\".",
+  "volume": "Bottle volume EXACTLY as printed on the label, keeping its unit (e.g. \\"750ml\\", \\"1L\\", \\"1.75L\\", \\"375ml\\"). \\"\\" if not legible -- do NOT assume 750ml.",
   "confidence": "high, medium, or low",
   "notes": "Anything uncertain or only partially legible — including text you saw but could not fully read. Empty string if nothing to flag."
 }
@@ -145,6 +149,47 @@ def _clean(value):
     if s.lower() in ("null", "none", "n/a", "na", "unknown"):
         return ""
     return s
+
+
+STANDARD_VOLUME_ML = 750
+
+
+def parse_volume_ml(raw):
+    """Label volume text -> integer millilitres, or None if unreadable.
+
+    Handles "750ml", "1L", "1.75L", "1,75 L", "375 mL", "70cl" and a bare
+    number. A bare number <= 10 is read as litres ("1.75" -> 1750), anything
+    larger as millilitres ("750" -> 750). Returns None rather than guessing, so
+    the caller can fall back to the column default instead of recording a wrong
+    volume.
+    """
+    s = (str(raw) if raw is not None else "").strip().lower()
+    if not s:
+        return None
+    s = s.replace(" ", "").rstrip(".")
+    m = re.match(
+        r"^([0-9]+(?:[.,][0-9]+)?)"
+        r"(ml|milliliters?|millilitres?|cl|centiliters?|centilitres?|l|liters?|litres?)?$",
+        s,
+    )
+    if not m:
+        return None
+    num = float(m.group(1).replace(",", "."))
+    unit = m.group(2) or ""
+    if unit.startswith("ml") or unit.startswith("milli"):
+        ml = num
+    elif unit.startswith("cl") or unit.startswith("centi"):
+        ml = num * 10
+    elif unit:
+        ml = num * 1000
+    else:
+        ml = num * 1000 if num <= 10 else num
+    ml = int(round(ml))
+    return ml if ml > 0 else None
+
+
+# Re-exported from db so intake output and the web card format volumes the same.
+format_volume = db.format_volume
 
 
 # --------------------------------------------------------------------------- #
@@ -354,6 +399,17 @@ def print_result(result):
     print(f"  Year:       {result.get('year')}")
     print(f"  Code:       {result.get('bottle_code')}")
     print(f"  MSRP:       {result.get('msrp')}")
+    print(f"  Category:   {db.normalize_category(result.get('category'))}")
+
+    vol = parse_volume_ml(result.get("volume"))
+    if vol is None:
+        print(f"  Volume:     not legible -- defaulting to {STANDARD_VOLUME_ML}ml")
+    elif vol != STANDARD_VOLUME_ML:
+        print(f"  Volume:     {format_volume(vol)}  <-- LARGE FORMAT, not {STANDARD_VOLUME_ML}ml")
+        print("              Market comparisons assume 750ml; check pricing for this one.")
+    else:
+        print(f"  Volume:     {format_volume(vol)}")
+
     print(f"  Confidence: {result.get('confidence')}")
     if result.get("notes"):
         print(f"  Notes:      {result.get('notes')}")
@@ -440,5 +496,7 @@ def add_bottle(bottle_data, user_id):
         bottle_code=_clean(bottle_data.get("bottle_code")),
         msrp=_clean(bottle_data.get("msrp")),
         status="active",
+        category=_clean(bottle_data.get("category")),
+        volume_ml=parse_volume_ml(bottle_data.get("volume")),
     )
     return bottle_id, "added"

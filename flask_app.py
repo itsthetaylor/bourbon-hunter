@@ -103,6 +103,39 @@ def brand_groups(bottles):
     return brands.brand_sections(product_groups(bottles))
 
 
+# Display labels for the category column. Order is deliberate, not alphabetical:
+# bourbon is the bulk of a collection here, wine the newest and smallest slice.
+CATEGORY_LABELS = {
+    "bourbon": "Bourbon & American Whiskey",
+    "spirit":  "Other Spirits",
+    "wine":    "Wine",
+}
+CATEGORY_ORDER = ("bourbon", "spirit", "wine")
+
+
+def _category_of(b):
+    return (b.get("category") or db.DEFAULT_CATEGORY).strip().lower()
+
+
+def category_sections(bottles):
+    """Bucket bottles by category, then brand within each.
+
+    Returns [{'key','label','count','sections'}] in CATEGORY_ORDER, omitting
+    categories the user owns nothing in, so a bourbon-only collection shows no
+    category furniture at all."""
+    out = []
+    for key in CATEGORY_ORDER:
+        rows = [b for b in bottles if _category_of(b) == key]
+        if rows:
+            out.append({
+                "key":      key,
+                "label":    CATEGORY_LABELS[key],
+                "count":    len(rows),
+                "sections": brand_groups(rows),
+            })
+    return out
+
+
 def _safe_next(nxt):
     """Only allow same-site relative redirect targets (block open redirects)."""
     if nxt and nxt.startswith("/") and not nxt.startswith("//"):
@@ -110,13 +143,28 @@ def _safe_next(nxt):
     return None
 
 
-def _render_collection(error=None, status_code=200):
-    """Render the current user's collection ONLY (scoped by current_user.id)."""
+def _render_collection(error=None, status_code=200, category=None):
+    """Render the current user's collection ONLY (scoped by current_user.id).
+
+    `category` optionally narrows the view to one category; anything not in
+    db.CATEGORIES is ignored and the whole collection is shown."""
     try:
         bottles = db.get_active_bottles(current_user.id)
+        active = category if category in db.CATEGORIES else None
+        # Counts come from the FULL collection so the filter tabs keep showing
+        # every category's total while one of them is selected.
+        present = category_sections(bottles)
+        shown = [c for c in present if active is None or c["key"] == active]
         html = render_template_string(
             INDEX_TEMPLATE,
-            brand_groups=brand_groups(bottles),
+            cat_sections=shown,
+            category_counts=[(c["key"], c["label"], c["count"]) for c in present],
+            active_category=active,
+            total_count=len(bottles),
+            show_categories=len(present) > 1,
+            categories=db.CATEGORIES,
+            volume_label=db.format_volume,
+            standard_volume=db.DEFAULT_VOLUME_ML,
             market=db.latest_market_values(current_user.id),
             url_labels=URL_LABELS,
             user_email=current_user.email,
@@ -201,13 +249,14 @@ def logout():
 @app.route("/collection")
 @login_required
 def collection():
-    return _render_collection()
+    return _render_collection(category=request.args.get("category"))
 
 
 @app.route("/edit/<bottle_id>", methods=["POST"])
 @login_required
 def edit(bottle_id):
-    """Update paid and/or the 4 *_url fields for one of the user's bottles."""
+    """Update paid, category, volume_ml and/or the 4 *_url fields for one of the
+    user's bottles."""
     target = db.get_bottle(bottle_id, current_user.id)
     if target is None:
         abort(404)  # not found OR not yours — same response either way
@@ -222,12 +271,34 @@ def edit(bottle_id):
                 return _render_collection(error=f"'{raw}' is not a valid price.", status_code=400)
         fields["paid"] = raw
 
+    if "category" in request.form:
+        # Unrecognized values normalize to the default rather than reaching the
+        # DB and tripping the CHECK constraint.
+        fields["category"] = db.normalize_category(request.form.get("category"))
+
+    if "volume_ml" in request.form:
+        raw = request.form.get("volume_ml", "").strip()
+        if raw != "":
+            try:
+                if int(float(raw)) <= 0:
+                    raise ValueError
+            except ValueError:
+                return _render_collection(
+                    error=f"'{raw}' is not a valid volume in ml.", status_code=400)
+        # Blank -> the column default; volume_ml is NOT NULL.
+        fields["volume_ml"] = db.normalize_volume_ml(raw)
+
     for key in URL_KEYS:
         if key in request.form:
             fields[key] = request.form.get(key, "").strip()
 
     db.update_bottle_fields(bottle_id, fields, current_user.id)
-    return redirect(url_for("collection") + f"#{target.get('product_key') or bottle_id}")
+
+    # Keep the category filter the user was looking at across the save.
+    back = request.form.get("return_category", "").strip()
+    args = {"category": back} if back in db.CATEGORIES else {}
+    return redirect(url_for("collection", **args)
+                    + f"#{target.get('product_key') or bottle_id}")
 
 
 @app.route("/archive/<bottle_id>", methods=["POST"])
@@ -328,6 +399,27 @@ h1 {
   border-bottom: 1px solid rgba(212,165,116,.18);
 }
 .brand-header:first-of-type { margin-top: 6px; }
+.cat-filter { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
+.cat-filter a {
+  text-decoration: none; color: #c9b896; background: rgba(45,26,14,.6);
+  border: 1px solid rgba(212,165,116,.22); border-radius: 999px;
+  padding: 7px 13px; font-size: 12.5px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.cat-filter a.active { background: #5a3318; color: #f4e4c1; border-color: rgba(212,165,116,.6); }
+.cat-header {
+  display: flex; align-items: baseline; gap: 8px;
+  font-family: Georgia, serif; font-size: 12px; font-weight: 700;
+  color: #a08770; letter-spacing: 2px; text-transform: uppercase;
+  margin: 30px 2px 2px;
+}
+.vol-badge {
+  display: inline-block; margin-left: 6px; font-size: 10.5px; font-weight: 700;
+  color: #f0d9a8; background: rgba(140,90,30,.5);
+  border: 1px solid rgba(212,165,116,.45); border-radius: 5px;
+  padding: 1px 6px; letter-spacing: .5px; vertical-align: 1px;
+}
+.fld-hint { font-size: 11px; color: #6b5544; margin-top: 4px; }
 .brand-count {
   font-size: 11px; font-weight: 700; color: #a08770;
   background: rgba(212,165,116,.12); border: 1px solid rgba(212,165,116,.28);
@@ -471,9 +563,21 @@ _ACTION_MACRO = """
 </div>
 <div id="edit_{{ b.bottle_id }}" class="edit-pane" style="display:none">
   <form method="post" action="{{ url_for('edit', bottle_id=b.bottle_id) }}">
+    <input type="hidden" name="return_category" value="{{ active_category or '' }}">
     <label class="fld" for="paid_{{ b.bottle_id }}">Paid ($)</label>
     <input type="number" step="0.01" inputmode="decimal" id="paid_{{ b.bottle_id }}"
            name="paid" value="{{ b.paid }}" placeholder="what you paid">
+    <label class="fld" for="cat_{{ b.bottle_id }}">Category</label>
+    <select id="cat_{{ b.bottle_id }}" name="category">
+      {% for c in categories %}
+      <option value="{{ c }}"{% if b.category == c %} selected{% endif %}>{{ c|capitalize }}</option>
+      {% endfor %}
+    </select>
+    <label class="fld" for="vol_{{ b.bottle_id }}">Volume (ml)</label>
+    <input type="number" step="1" min="1" inputmode="numeric" id="vol_{{ b.bottle_id }}"
+           name="volume_ml" value="{{ b.volume_ml }}"
+           placeholder="{{ standard_volume }}">
+    <div class="fld-hint">750 = standard &middot; 1000 = 1L &middot; 1750 = 1.75L</div>
     {% for key, label in url_labels %}
     <label class="fld">{{ label }} URL</label>
     <div class="url-row">
@@ -615,15 +719,37 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <a href="{{ url_for('logout') }}">Log out</a>
   </nav>
 
+  {% if show_categories %}
+  <div class="cat-filter">
+    <a href="{{ url_for('collection') }}"
+       class="{% if not active_category %}active{% endif %}">All
+       <span class="brand-count">{{ total_count }}</span></a>
+    {% for key, label, cnt in category_counts %}
+    <a href="{{ url_for('collection', category=key) }}"
+       class="{% if active_category == key %}active{% endif %}">{{ label }}
+       <span class="brand-count">{{ cnt }}</span></a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if error %}<div class="banner">{{ error }}</div>{% endif %}
 
-  {% if not brand_groups %}
-    <div class="empty">No active bottles yet.<br>Add via photo intake, then edit here.</div>
+  {% if not cat_sections %}
+    {% if active_category %}
+      <div class="empty">No active bottles in this category.<br>
+        <a href="{{ url_for('collection') }}" style="color:#d4a574">Show all bottles</a></div>
+    {% else %}
+      <div class="empty">No active bottles yet.<br>Add via photo intake, then edit here.</div>
+    {% endif %}
   {% endif %}
 
 """ + _ACTION_MACRO + """
 
-  {% for section in brand_groups %}
+  {% for cat in cat_sections %}
+  {% if show_categories %}
+  <div class="cat-header">{{ cat.label }} <span class="brand-count">{{ cat.count }}</span></div>
+  {% endif %}
+  {% for section in cat.sections %}
   <div class="brand-header">{{ section.brand }} <span class="brand-count">{{ section.groups|length }}</span></div>
   {% for grp in section.groups %}
   {% set b0 = grp[0] %}
@@ -638,6 +764,12 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <div class="card-sub">
       {{ b0.proof or '&mdash;' }}{% if b0.proof %} proof{% endif %}
       {%- if b0.batch %} &middot; Batch {{ b0.batch }}{% endif %}
+      {#- Volume is shown only when it is NOT the 750ml standard. For a
+          multi-bottle group it goes on each unit below instead, since a group
+          can mix sizes (product_key ignores volume). #}
+      {%- if count == 1 and b0.volume_ml != standard_volume %}
+        <span class="vol-badge">{{ volume_label(b0.volume_ml) }}</span>
+      {%- endif %}
       {%- if count == 1 and b0.bottle_code %} &middot; {{ b0.bottle_code }}{% endif %}
     </div>
 
@@ -672,6 +804,9 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
         <div class="bottle-unit" id="{{ b.bottle_id }}">
           <div class="unit-meta">
             <strong style="color:#c9b896">{% if b.paid %}${{ '%.0f'|format(b.paid|float) }} paid{% else %}no cost logged{% endif %}</strong>
+            {%- if b.volume_ml != standard_volume %}
+              <span class="vol-badge">{{ volume_label(b.volume_ml) }}</span>
+            {%- endif %}
             {%- if b.date_acquired %} &middot; {{ b.date_acquired }}{% endif %}
             {%- if b.bottle_code %}<br><span style="font-size:11px;color:#6b5544">{{ b.bottle_code }}</span>{% endif %}
           </div>
@@ -681,6 +816,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
       </details>
     {% endif %}
   </div>
+  {% endfor %}
   {% endfor %}
   {% endfor %}
 
