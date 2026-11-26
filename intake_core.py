@@ -46,13 +46,15 @@ import db
 
 pillow_heif.register_heif_opener()  # lets Pillow open .heic/.heif (iPhone photos)
 
-MODEL = "claude-sonnet-4-5"
-MAX_TOKENS = 2000             # must fit ONE JSON entry per bottle for a whole
-                              # group. Worst case is every photo being its own
-                              # bottle, so this scales with MAX_IMAGES_PER_CALL:
-                              # ~100 tokens/entry x 20 + slack. A truncated
-                              # response is invalid JSON and fails the whole
-                              # group, and unused headroom costs nothing.
+MODEL = "claude-sonnet-5-5"   # current Sonnet. Runs adaptive thinking by default,
+                              # so the response holds thinking blocks before the
+                              # text block, and thinking tokens count toward
+                              # max_tokens (see identify_bottle).
+MAX_TOKENS = 8000             # must fit the model's thinking PLUS one JSON entry
+                              # per bottle for a whole group (worst case every
+                              # photo is its own bottle, ~100 tokens x 20). A
+                              # truncated response is invalid JSON and fails the
+                              # whole group; unused headroom is never billed.
 CLUSTER_WINDOW_SECONDS = 90   # photos within this gap = same bottle
 MAX_IMAGES_PER_CALL = 20      # cap per vision call. cluster_photos sub-chunks any
                               # time group over this at its largest internal gaps,
@@ -744,7 +746,24 @@ def identify_bottle(group):
     except Exception as e:  # noqa: BLE001 — any API/transport failure is a failed group
         return [{"error": f"vision call failed: {type(e).__name__}: {e}"}]
 
-    text = message.content[0].text.strip()
+    # A safety refusal returns HTTP 200 with stop_reason "refusal" and no
+    # usable content; report it as a failed group rather than parsing nothing.
+    stop = getattr(message, "stop_reason", None)
+    if stop == "refusal":
+        det = getattr(message, "stop_details", None)
+        why = getattr(det, "category", None) or "unspecified"
+        return [{"error": f"model declined to identify this group (refusal: {why})"}]
+
+    # Pick the text block by type: with adaptive thinking on, content[0] is a
+    # thinking block and indexing it would read the wrong thing (or crash).
+    text = "".join(getattr(b, "text", "") for b in message.content
+                   if getattr(b, "type", None) == "text").strip()
+    if not text:
+        return [{"error": f"empty text response (stop_reason={stop})"}]
+    if stop == "max_tokens":
+        return [{"error": "response cut off at MAX_TOKENS before the JSON closed; "
+                          "raise MAX_TOKENS or split the group", "raw": text[:400]}]
+
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
