@@ -10,8 +10,9 @@ then uses the SAME shared logic as the local path (intake_core):
      bottles in that group (time proximity alone doesn't mean "same bottle"),
   4. show the grouping WITH the names vision read, flagging any group it split,
      and wait for confirmation,
-  5. write each identified bottle as its own row (atomic, via db.insert_bottle)
-     and move that group's photos to processed/failed.
+  5. write each identified bottle as its own row (atomic, via db.insert_bottle),
+     moving each photo to photos_processed only if a bottle claimed it, and to
+     photos_failed otherwise.
 """
 
 import io
@@ -226,9 +227,20 @@ def main():
             else:
                 print(f"  Added to the database as: {bottle_id}")
 
-        for p in group:
-            move_file(service, p["file_id"], folders["processed"])
-        print(f"  Moved {len(group)} photo(s) to {PROCESSED_FOLDER_NAME}/")
+        # Only photos vision actually attached to a bottle are "processed".
+        # Anything left over had nothing written for it, so it goes to failed
+        # where it stays visible instead of looking done.
+        assigned, unassigned = core.partition_group(group, bottles)
+        if unassigned:
+            names = ", ".join(p["key"] for p in unassigned)
+            print(f"  {len(unassigned)} photo(s) NOT assigned to any bottle: {names}")
+            for p in unassigned:
+                move_file(service, p["file_id"], folders["failed"])
+            print(f"  Moved those to {FAILED_FOLDER_NAME}/ — nothing was written for them.")
+        if assigned:
+            for p in assigned:
+                move_file(service, p["file_id"], folders["processed"])
+            print(f"  Moved {len(assigned)} photo(s) to {PROCESSED_FOLDER_NAME}/")
 
 
 if __name__ == "__main__":

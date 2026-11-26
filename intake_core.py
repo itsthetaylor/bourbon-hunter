@@ -47,9 +47,18 @@ import db
 pillow_heif.register_heif_opener()  # lets Pillow open .heic/.heif (iPhone photos)
 
 MODEL = "claude-sonnet-4-5"
-MAX_TOKENS = 600
+MAX_TOKENS = 2000             # must fit ONE JSON entry per bottle for a whole
+                              # group. Worst case is every photo being its own
+                              # bottle, so this scales with MAX_IMAGES_PER_CALL:
+                              # ~100 tokens/entry x 20 + slack. A truncated
+                              # response is invalid JSON and fails the whole
+                              # group, and unused headroom costs nothing.
 CLUSTER_WINDOW_SECONDS = 90   # photos within this gap = same bottle
-MAX_IMAGES_PER_CALL = 6       # cap images per vision call — large HEIC batches hit the 413 limit
+MAX_IMAGES_PER_CALL = 20      # hard cap per vision call; a bigger group HARD-STOPS
+                              # rather than being truncated (see identify_bottle)
+MAX_IMAGE_EDGE_PX = 1568      # Claude downsizes beyond this itself, so sending more
+                              # pixels costs request size with no accuracy gain
+JPEG_QUALITY = 85             # re-encode quality for every image we send
 
 CLAUDE_SUPPORTED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
@@ -400,9 +409,27 @@ def format_groups(groups, identified=None):
         if missing:
             lines.append(f"      ** {len(missing)} photo(s) not assigned to any bottle: "
                          f"{', '.join(missing)}")
-            lines.append("         They are still moved as processed. Re-shoot or add "
-                         "them by hand if one is its own bottle.")
+            lines.append("         Nothing is written for them, so they go to the "
+                         "FAILED folder, not processed.")
     return "\n".join(lines)
+
+
+def partition_group(group, bottles):
+    """Split a group's photos by whether vision assigned them to a bottle.
+
+    Returns (assigned, unassigned). A photo is unassigned when no bottle claimed
+    it — a misread, or a bottle the model could not place. Nothing is written for
+    those, so the caller must file them as FAILED, never processed. If the whole
+    group failed identification (including the over-limit hard stop), every
+    photo is unassigned.
+    """
+    if not bottles or (len(bottles) == 1 and _is_error(bottles[0])):
+        return [], list(group)
+    claimed = {i for b in bottles if not _is_error(b)
+               for i in (b.get("photo_indices") or [])}
+    assigned = [p for n, p in enumerate(group) if n in claimed]
+    unassigned = [p for n, p in enumerate(group) if n not in claimed]
+    return assigned, unassigned
 
 
 def confirm_groups(groups, identified=None, yes=False):
@@ -442,14 +469,25 @@ def confirm_groups(groups, identified=None, yes=False):
 # --------------------------------------------------------------------------- #
 
 def normalize_image(image_bytes, mime_type):
-    """Convert to a Claude-supported format if needed (e.g. HEIC -> JPEG)."""
-    if mime_type in CLAUDE_SUPPORTED_TYPES:
-        return image_bytes, mime_type
+    """Decode, downscale to MAX_IMAGE_EDGE_PX on the long edge, re-encode as JPEG.
+
+    This runs on EVERY image, including ones already in a Claude-supported
+    format. A full-resolution iPhone photo is several thousand pixels wide;
+    Claude downsizes anything over MAX_IMAGE_EDGE_PX before looking at it, so
+    those extra pixels only inflate the request. Normalizing here is what makes
+    a 20-photo group fit in one call.
+
+    mime_type is still used to pick the decoder (pillow_heif is registered for
+    HEIC); the output is always JPEG.
+    """
     img = Image.open(io.BytesIO(image_bytes))
     if img.mode != "RGB":
         img = img.convert("RGB")
+    # thumbnail() only ever shrinks, so an already-small photo keeps its size
+    # and is never upscaled into fake detail.
+    img.thumbnail((MAX_IMAGE_EDGE_PX, MAX_IMAGE_EDGE_PX), Image.LANCZOS)
     out = io.BytesIO()
-    img.save(out, format="JPEG", quality=90)
+    img.save(out, format="JPEG", quality=JPEG_QUALITY)
     return out.getvalue(), "image/jpeg"
 
 
@@ -526,15 +564,18 @@ def identify_bottle(group):
     plus photo_indices / photo_keys naming the photos it was read from. On
     failure, returns a single-item list whose only entry has an 'error' key.
     """
-    sent = group
+    # HARD STOP, never truncate: dropping photos silently loses whole bottles,
+    # and the group would then be filed as processed with nothing written for
+    # the photos that were cut.
     if len(group) > MAX_IMAGES_PER_CALL:
-        dropped = [p.get("key", "?") for p in group[MAX_IMAGES_PER_CALL:]]
-        print(f"  WARNING: {len(group)} photos in this group; sending only the first "
-              f"{MAX_IMAGES_PER_CALL} to stay under the API size limit.")
-        print(f"           Not sent: {', '.join(dropped)}")
-        print("           A bottle shown ONLY in those photos will be missed. They are "
-              "reported as unassigned below.")
-        sent = group[:MAX_IMAGES_PER_CALL]
+        names = ", ".join(p.get("key", "?") for p in group)
+        return [{"error": (
+            f"{len(group)} photos in this group, over the {MAX_IMAGES_PER_CALL}-photo "
+            f"limit for a single vision call. Nothing was sent or identified for it — "
+            f"no photos were dropped. Split these into smaller batches "
+            f"(re-shoot further apart, or move some aside) and re-run: {names}")}]
+
+    sent = group
 
     global _client
     if _client is None:

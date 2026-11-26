@@ -10,7 +10,9 @@ back / hand-written info). This script:
      bottles in that group (time proximity alone doesn't mean "same bottle"),
   4. shows you the grouping WITH the names vision read, flagging any group it
      split, and waits for confirmation, and
-  5. writes each identified bottle as its own row (atomic, via db.insert_bottle).
+  5. writes each identified bottle as its own row (atomic, via db.insert_bottle),
+     filing each photo under photos_processed only if a bottle claimed it, and
+     under photos_failed otherwise.
 
 All identification/clustering/writing logic lives in intake_core.py so this and
 drive_intake.py stay identical in behavior.
@@ -113,8 +115,18 @@ def main():
             else:
                 print(f"  Added to the database as: {bottle_id}")
 
-        _move_all(group, PHOTOS_PROCESSED)
-        print(f"  Moved {len(group)} photo(s) to {PHOTOS_PROCESSED}")
+        # Only photos vision actually attached to a bottle are "processed".
+        # Anything left over had nothing written for it, so it goes to failed
+        # where it stays visible instead of looking done.
+        assigned, unassigned = core.partition_group(group, bottles)
+        if unassigned:
+            names = ", ".join(p["key"] for p in unassigned)
+            print(f"  {len(unassigned)} photo(s) NOT assigned to any bottle: {names}")
+            _move_all(unassigned, PHOTOS_FAILED)
+            print(f"  Moved those to {PHOTOS_FAILED} — nothing was written for them.")
+        if assigned:
+            _move_all(assigned, PHOTOS_PROCESSED)
+            print(f"  Moved {len(assigned)} photo(s) to {PHOTOS_PROCESSED}")
 
 
 if __name__ == "__main__":
