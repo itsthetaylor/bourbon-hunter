@@ -122,12 +122,15 @@ DO NOT guess, infer, or fill in a typical/expected value. A blank the user can f
 is far better than a wrong value the user has to discover and correct weeks later.
 
 Respond ONLY with valid JSON in this exact shape (no markdown, no extra text).
-"bottles" is a LIST — one entry per distinct physical bottle, even if there is only one:
+"bottles" is a LIST — one entry per distinct physical bottle, even if there is only one.
+"photo_numbers" is a JSON LIST OF INTEGERS (the photo labels), never a string: every
+photo of this bottle — front, back, bottom, tag — goes in that list, and no photo
+number appears under two different bottles.
 
 {
  "bottles": [
   {
-  "photo_numbers": "LIST of the photo numbers showing THIS bottle, e.g. [1, 3]. Every photo of this bottle (front, back, bottom, tag) goes in this list. Never list a photo number under two different bottles.",
+  "photo_numbers": [1, 3],
   "name": "Full bottle name as commonly referenced",
   "distillery": "Distillery or brand, or \\"\\"",
   "proof": "Proof to ONE DECIMAL PLACE exactly as printed (e.g. \\"127.4\\", not \\"127\\" and not \\"127 proof\\"). \\"\\" if not clearly legible.",
@@ -558,10 +561,27 @@ def _coerce_photo_indices(raw_numbers, n_sent):
     index means the model is confused about that photo, and silently attaching
     it to a bottle is the exact failure this split is meant to prevent.
     """
-    out = []
-    for v in (raw_numbers or []):
+    # The model sometimes returns the list as a string ("[1, 12]"). Iterating a
+    # string yields characters, so "12" became photos 1 and 2 — the wrong photo
+    # attached to the wrong bottle, silently. Parse it as JSON first, then fall
+    # back to pulling out the integers.
+    if isinstance(raw_numbers, str):
         try:
-            i = int(str(v).strip()) - 1
+            parsed = json.loads(raw_numbers)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, str):
+            parsed = None            # '"7"' decodes to a string; scan it instead
+        raw_numbers = parsed if parsed is not None else re.findall(r"\d+", raw_numbers)
+    if isinstance(raw_numbers, (int, float)):
+        raw_numbers = [raw_numbers]
+    if not isinstance(raw_numbers, (list, tuple)):
+        return []
+
+    out = []
+    for v in raw_numbers:
+        try:
+            i = int(float(str(v).strip())) - 1   # tolerate 3.0 / "3.0"
         except (TypeError, ValueError):
             continue
         if 0 <= i < n_sent and i not in out:
