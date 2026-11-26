@@ -5,11 +5,13 @@ Pulls bottle photos from the Drive 'Bourbon Hunter/photos_to_process' folder,
 then uses the SAME shared logic as the local path (intake_core):
   1. download every intake photo (we read EXIF from the bytes, so local and
      Drive clustering are one identical code path),
-  2. cluster photos within 180s into one bottle,
-  3. show the proposed grouping and wait for confirmation,
-  4. send each bottle's photos to ONE vision call,
-  5. write to the SQLite DB (atomic, via db.insert_bottle) and move that bottle's
-     photos to processed/failed.
+  2. cluster photos within CLUSTER_WINDOW_SECONDS (90s) into a candidate group,
+  3. send each group to ONE vision call, which may report SEVERAL distinct
+     bottles in that group (time proximity alone doesn't mean "same bottle"),
+  4. show the grouping WITH the names vision read, flagging any group it split,
+     and wait for confirmation,
+  5. write each identified bottle as its own row (atomic, via db.insert_bottle)
+     and move that group's photos to processed/failed.
 """
 
 import io
@@ -175,40 +177,54 @@ def main():
         print("\nNothing was written.")
         return
 
-    if not core.confirm_groups(groups, yes=yes):
-        print("Aborted — nothing written.")
-        return
-
+    # Checked before the vision calls so a missing account costs no API spend.
     owner_id = core.owner_user_id()
     if owner_id is None:
         print("No account exists yet. Create your account in the app first, then re-run intake.")
         return
 
+    # Identify BEFORE confirming: the confirmation has to show the names vision
+    # read so a misread or a bad split can be caught before anything is written.
+    print(f"\nIdentifying {len(groups)} photo group(s)...")
+    identified = []
     for i, group in enumerate(groups, 1):
+        print(f"  Group {i} of {len(groups)} ({len(group)} photo(s))...")
+        identified.append(core.identify_bottle(group))
+
+    if not core.confirm_groups(groups, identified, yes=yes):
+        print("Aborted — nothing written.")
+        return
+
+    for i, (group, bottles) in enumerate(zip(groups, identified), 1):
         keys = ", ".join(p["key"] for p in group)
-        print(f"\nBottle {i}: {keys}")
+        print(f"\nGroup {i}: {keys}")
         print("-" * 60)
 
-        result = core.identify_bottle([(p["bytes"], p["mime"]) for p in group])
-
-        if "error" in result:
-            print(f"  Failed: {result['error']}")
-            if "raw" in result:
-                print(f"  Raw response: {result['raw'][:200]}")
+        if len(bottles) == 1 and "error" in bottles[0]:
+            print(f"  Failed: {bottles[0]['error']}")
+            if "raw" in bottles[0]:
+                print(f"  Raw response: {bottles[0]['raw'][:200]}")
             for p in group:
                 move_file(service, p["file_id"], folders["failed"])
             print(f"  Moved {len(group)} photo(s) to {FAILED_FOLDER_NAME}/")
             continue
 
-        core.print_result(result)
+        if len(bottles) > 1:
+            print(f"  Vision found {len(bottles)} distinct bottles here — "
+                  "writing each as its own row.")
 
-        bottle_id, status = core.add_bottle(result, owner_id)
-        if status == "duplicate":
-            print(f"  Already in collection (id: {bottle_id}) — skipped")
-        elif status == "no_name":
-            print("  Model returned no name — skipped (not written)")
-        else:
-            print(f"  Added to the database as: {bottle_id}")
+        for b in bottles:
+            if b.get("photo_keys"):
+                print(f"\n  From: {', '.join(b['photo_keys'])}")
+            core.print_result(b)
+
+            bottle_id, status = core.add_bottle(b, owner_id)
+            if status == "duplicate":
+                print(f"  Already in collection (id: {bottle_id}) — skipped")
+            elif status == "no_name":
+                print("  Model returned no name — skipped (not written)")
+            else:
+                print(f"  Added to the database as: {bottle_id}")
 
         for p in group:
             move_file(service, p["file_id"], folders["processed"])

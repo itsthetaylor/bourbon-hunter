@@ -6,7 +6,8 @@ gather raw photos from their source, then hand them to the functions here. This
 module is the single source of truth for:
 
   * the vision prompt
-  * EXIF capture-time reading (JPEG + HEIC) and 180-second clustering into bottles
+  * EXIF capture-time reading (JPEG + HEIC) and 90-second clustering into candidate
+    groups (CLUSTER_WINDOW_SECONDS)
   * the multi-image vision call (all photos of one bottle in a single request)
   * response parsing + atomic add_bottle() (writes to the DB via db.insert_bottle)
 
@@ -69,11 +70,27 @@ _client = None  # lazily constructed so importing this module never needs an API
 # Vision prompt (STEP 4 — granular detail, empty-not-guessed)
 # --------------------------------------------------------------------------- #
 
-VISION_PROMPT = """You are identifying a single bottle of bourbon, another spirit, or wine from one or more photos.
+VISION_PROMPT = """You are identifying bottles of bourbon, other spirits, or wine from a set of photos.
 
-The images you receive (there may be several) are ALL of the SAME bottle — typically
-the front label plus the bottle bottom and/or the back/neck label and any hand-written
-tag. Read across ALL of the images and combine what you see into ONE description.
+Each photo is labelled "Photo 1:", "Photo 2:" and so on, in the order given.
+
+These photos may show MORE THAN ONE distinct bottle. They were grouped only by the
+time they were taken, which is not reliable evidence that they show the same bottle:
+two different bottles photographed moments apart land in the same group.
+
+Group the photos by what the LABELS say — name, proof, batch/dump, bottle code — not
+by how close together they were taken. Return ONE entry per distinct PHYSICAL bottle,
+listing which photos belong to it.
+
+A back label, neck label, bottle bottom, or hand-written tag shot STAYS WITH the
+bottle it belongs to; it is not a separate bottle. Several photos of one bottle are
+one entry. Use the readable details to decide: the same name AND the same proof AND
+the same batch/code means one bottle; a different proof, batch, or dump code means a
+different bottle, even for the same product line.
+
+If you cannot tell which bottle a photo belongs to, leave it out of every entry
+rather than guessing — an unassigned photo is reported to the user, a wrongly
+merged one is not.
 
 Why detail matters: different batches of the same product line (for example, two
 E.H. Taylor Barrel Proof bottles at 127.4 vs 127.3 proof) are DIFFERENT bottles that
@@ -94,9 +111,13 @@ If a field is not clearly legible, or is not present, return it as an EMPTY stri
 DO NOT guess, infer, or fill in a typical/expected value. A blank the user can fill in
 is far better than a wrong value the user has to discover and correct weeks later.
 
-Respond ONLY with valid JSON in this exact shape (no markdown, no extra text):
+Respond ONLY with valid JSON in this exact shape (no markdown, no extra text).
+"bottles" is a LIST — one entry per distinct physical bottle, even if there is only one:
 
 {
+ "bottles": [
+  {
+  "photo_numbers": "LIST of the photo numbers showing THIS bottle, e.g. [1, 3]. Every photo of this bottle (front, back, bottom, tag) goes in this list. Never list a photo number under two different bottles.",
   "name": "Full bottle name as commonly referenced",
   "distillery": "Distillery or brand, or \\"\\"",
   "proof": "Proof to ONE DECIMAL PLACE exactly as printed (e.g. \\"127.4\\", not \\"127\\" and not \\"127 proof\\"). \\"\\" if not clearly legible.",
@@ -108,9 +129,11 @@ Respond ONLY with valid JSON in this exact shape (no markdown, no extra text):
   "volume": "Bottle volume EXACTLY as printed on the label, keeping its unit (e.g. \\"750ml\\", \\"1L\\", \\"1.75L\\", \\"375ml\\"). \\"\\" if not legible -- do NOT assume 750ml.",
   "confidence": "high, medium, or low",
   "notes": "Anything uncertain or only partially legible — including text you saw but could not fully read. Empty string if nothing to flag."
+  }
+ ]
 }
 
-If the images do not show an identifiable bottle at all, return exactly:
+If NONE of the photos show an identifiable bottle, return exactly:
 {"error": "could not identify"}
 """
 
@@ -305,30 +328,112 @@ def cluster_photos(photos, window_seconds=CLUSTER_WINDOW_SECONDS):
     return groups, None
 
 
-def format_groups(groups):
+def _is_error(bottle):
+    return isinstance(bottle, dict) and "error" in bottle
+
+
+def bottle_label(b):
+    """One-line label for a bottle vision read, for the confirmation output."""
+    name = _clean(b.get("name")) or "(no name read)"
+    bits = []
+    proof = _clean(b.get("proof"))
+    if proof:
+        bits.append(f"{proof} proof")
+    batch = _clean(b.get("batch"))
+    if batch:
+        bits.append(f"Batch {batch}")
+    code = _clean(b.get("bottle_code"))
+    if code:
+        bits.append(code)
+    vol = parse_volume_ml(b.get("volume"))
+    if vol and vol != STANDARD_VOLUME_ML:
+        bits.append(format_volume(vol))
+    cat = db.normalize_category(b.get("category"))
+    if cat != db.DEFAULT_CATEGORY:
+        bits.append(cat)
+    conf = _clean(b.get("confidence")).lower()
+    if conf and conf != "high":
+        bits.append(f"{conf} confidence")
+    return name + (f"  ({', '.join(bits)})" if bits else "")
+
+
+def format_groups(groups, identified=None):
+    """Render the time groups, and -- when `identified` is supplied -- what vision
+    read from each group's labels, flagging splits and unassigned photos.
+
+    `identified` is a list parallel to `groups`; each element is the list
+    identify_bottle returned for that group.
+    """
     lines = []
     for i, g in enumerate(groups, 1):
         items = ", ".join(f"{p['key']} [{p['time_source']}]" for p in g)
         t0 = g[0]["capture_time"].isoformat(timespec="seconds")
-        lines.append(f"  Bottle {i}: [{items}]  (starts {t0})")
+        lines.append(f"  Group {i}: [{items}]  (starts {t0})")
+
+        if identified is None:
+            continue
+
+        entry = identified[i - 1] if i - 1 < len(identified) else None
+        if not entry:
+            lines.append("      (not identified)")
+            continue
+
+        if len(entry) == 1 and _is_error(entry[0]):
+            lines.append(f"      ** VISION FAILED: {entry[0]['error']}")
+            lines.append("         Nothing is written for this group; its photos go to "
+                         "the failed folder.")
+            continue
+
+        real = [b for b in entry if not _is_error(b)]
+        if len(real) > 1:
+            lines.append(f"      ** SPLIT: time-clustering merged {len(real)} DISTINCT "
+                         "bottles into this group.")
+            lines.append("         Each is written as its own row. Check the names below "
+                         "before continuing.")
+        for b in real:
+            keys = ", ".join(b.get("photo_keys") or [])
+            where = f"   [{keys}]" if keys else "   [NO photos assigned]"
+            lines.append(f"      -> {bottle_label(b)}{where}")
+
+        assigned = {i2 for b in real for i2 in (b.get("photo_indices") or [])}
+        missing = [p["key"] for n, p in enumerate(g) if n not in assigned]
+        if missing:
+            lines.append(f"      ** {len(missing)} photo(s) not assigned to any bottle: "
+                         f"{', '.join(missing)}")
+            lines.append("         They are still moved as processed. Re-shoot or add "
+                         "them by hand if one is its own bottle.")
     return "\n".join(lines)
 
 
-def confirm_groups(groups, yes=False):
-    """Show the proposed grouping and ask before any CSV write. Returns bool.
+def confirm_groups(groups, identified=None, yes=False):
+    """Show the grouping -- and what vision read -- then ask before any DB write.
 
-    Pass yes=True (or --yes on the CLI) to skip the interactive prompt and
-    proceed automatically — useful when stdin is not a terminal.
+    Called AFTER identification so a misread or a bad split can be caught before
+    anything is written. Pass yes=True (or --yes on the CLI) to skip the prompt.
     """
-    print("\nProposed grouping — one bottle per group, [exif] vs [file] shows the "
-          "time source:")
-    print(format_groups(groups))
+    print("\nProposed grouping — photos clustered by time, then separated by what "
+          "vision read from the labels.")
+    print("[exif] vs [file] shows the time source.")
+    print(format_groups(groups, identified))
+
+    if identified is None:
+        summary = f"{len(groups)} group(s)"
+    else:
+        writable = [b for e in identified for b in e if not _is_error(b)]
+        splits = sum(1 for e in identified
+                     if len([b for b in e if not _is_error(b)]) > 1)
+        failed = sum(1 for e in identified
+                     if len(e) == 1 and _is_error(e[0]))
+        summary = f"{len(writable)} bottle(s) from {len(groups)} photo group(s)"
+        if splits:
+            summary += f"; {splits} group(s) SPLIT by vision"
+        if failed:
+            summary += f"; {failed} group(s) failed identification"
+
     if yes:
-        print(f"\n--yes flag set: proceeding with {len(groups)} bottle(s).")
+        print(f"\n--yes flag set: proceeding with {summary}.")
         return True
-    ans = input(
-        f"\nProceed to identify & write {len(groups)} bottle(s)? [y/N]: "
-    ).strip().lower()
+    ans = input(f"\nProceed to write {summary}? [y/N]: ").strip().lower()
     return ans in ("y", "yes")
 
 
@@ -348,16 +453,89 @@ def normalize_image(image_bytes, mime_type):
     return out.getvalue(), "image/jpeg"
 
 
-def identify_bottle(images):
-    """Identify one bottle from a list of (image_bytes, mime_type) tuples.
+def _coerce_photo_indices(raw_numbers, n_sent):
+    """Model's 1-based photo_numbers -> sorted, deduped, in-range 0-based indices.
 
-    All images are sent in a single vision call so the model can combine detail
-    from the front label, bottle bottom, and back. Capped at MAX_IMAGES_PER_CALL
-    to avoid hitting the API request-size limit.
+    Anything unparseable or out of range is dropped rather than clamped: a bad
+    index means the model is confused about that photo, and silently attaching
+    it to a bottle is the exact failure this split is meant to prevent.
     """
-    if len(images) > MAX_IMAGES_PER_CALL:
-        print(f"  Note: {len(images)} images in group; sending first {MAX_IMAGES_PER_CALL} to stay under API size limit.")
-        images = images[:MAX_IMAGES_PER_CALL]
+    out = []
+    for v in (raw_numbers or []):
+        try:
+            i = int(str(v).strip()) - 1
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < n_sent and i not in out:
+            out.append(i)
+    return sorted(out)
+
+
+def _parse_bottles(payload, sent):
+    """Normalize a vision response into a list of bottle dicts.
+
+    Accepts the documented {"bottles": [...]} shape and also tolerates a bare
+    list or a single bottle object, so a model that regresses to the old
+    one-bottle shape still works. Each returned dict carries:
+        photo_indices  0-based indices into `sent`
+        photo_keys     the matching display names, for the confirmation output
+    """
+    if isinstance(payload, dict) and "error" in payload:
+        return [{"error": payload.get("error") or "could not identify"}]
+
+    if isinstance(payload, dict) and isinstance(payload.get("bottles"), list):
+        raw = payload["bottles"]
+    elif isinstance(payload, list):
+        raw = payload
+    elif isinstance(payload, dict) and payload.get("name"):
+        raw = [payload]          # old single-bottle shape
+    else:
+        return [{"error": "unrecognized response shape",
+                 "raw": json.dumps(payload)[:400]}]
+
+    raw = [b for b in raw if isinstance(b, dict)]
+    if not raw:
+        return [{"error": "no bottles in response"}]
+
+    bottles = []
+    for b in raw:
+        b = dict(b)
+        idx = _coerce_photo_indices(b.pop("photo_numbers", None), len(sent))
+        b["photo_indices"] = idx
+        b["photo_keys"] = [sent[i].get("key", f"photo {i + 1}") for i in idx]
+        bottles.append(b)
+
+    # Only safe when there is exactly one bottle: give it every photo sent. With
+    # two or more, an empty list is left empty and surfaced as unassigned.
+    if len(bottles) == 1 and not bottles[0]["photo_indices"]:
+        bottles[0]["photo_indices"] = list(range(len(sent)))
+        bottles[0]["photo_keys"] = [p.get("key", "") for p in sent]
+
+    return bottles
+
+
+def identify_bottle(group):
+    """Identify every distinct bottle in one time-clustered group of photos.
+
+    `group` is a list of photo dicts (as cluster_photos returns), each with
+    'bytes' and 'mime'. All photos go in a single vision call so the model can
+    both combine detail across shots of one bottle AND separate two bottles that
+    time-clustering merged.
+
+    Returns a LIST of bottle dicts. Each carries the identified label fields
+    plus photo_indices / photo_keys naming the photos it was read from. On
+    failure, returns a single-item list whose only entry has an 'error' key.
+    """
+    sent = group
+    if len(group) > MAX_IMAGES_PER_CALL:
+        dropped = [p.get("key", "?") for p in group[MAX_IMAGES_PER_CALL:]]
+        print(f"  WARNING: {len(group)} photos in this group; sending only the first "
+              f"{MAX_IMAGES_PER_CALL} to stay under the API size limit.")
+        print(f"           Not sent: {', '.join(dropped)}")
+        print("           A bottle shown ONLY in those photos will be missed. They are "
+              "reported as unassigned below.")
+        sent = group[:MAX_IMAGES_PER_CALL]
+
     global _client
     if _client is None:
         _api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -369,8 +547,12 @@ def identify_bottle(images):
         _client = Anthropic(api_key=_api_key)
 
     content = []
-    for image_bytes, mime_type in images:
-        norm_bytes, norm_mime = normalize_image(image_bytes, mime_type)
+    for n, p in enumerate(sent, 1):
+        norm_bytes, norm_mime = normalize_image(p["bytes"], p["mime"])
+        # Label each image inline: the model assigns photo_numbers far more
+        # reliably when the number travels with the image than when it has to
+        # infer position from ordering alone.
+        content.append({"type": "text", "text": f"Photo {n}:"})
         content.append({
             "type": "image",
             "source": {
@@ -392,9 +574,10 @@ def identify_bottle(images):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
     try:
-        return json.loads(text)
+        payload = json.loads(text)
     except json.JSONDecodeError:
-        return {"error": "invalid response", "raw": text}
+        return [{"error": "invalid response", "raw": text}]
+    return _parse_bottles(payload, sent)
 
 
 def print_result(result):

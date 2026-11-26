@@ -4,10 +4,13 @@ Local-folder intake.
 Drop bottle photos into data/photos_to_process/ (front label + bottle bottom +
 back / hand-written info). This script:
   1. reads each photo's capture time,
-  2. clusters photos within 180s into one bottle (intake_core.cluster_photos),
-  3. shows you the proposed grouping and waits for confirmation,
-  4. sends each bottle's photos to ONE vision call, and
-  5. writes the bottle to the SQLite DB (atomic, via db.insert_bottle).
+  2. clusters photos within CLUSTER_WINDOW_SECONDS (90s) into a candidate group
+     (intake_core.cluster_photos),
+  3. sends each group to ONE vision call, which may report SEVERAL distinct
+     bottles in that group (time proximity alone doesn't mean "same bottle"),
+  4. shows you the grouping WITH the names vision read, flagging any group it
+     split, and waits for confirmation, and
+  5. writes each identified bottle as its own row (atomic, via db.insert_bottle).
 
 All identification/clustering/writing logic lives in intake_core.py so this and
 drive_intake.py stay identical in behavior.
@@ -62,39 +65,53 @@ def main():
         print("\nNothing was written.")
         return
 
-    if not core.confirm_groups(groups, yes=yes):
-        print("Aborted — nothing written.")
-        return
-
+    # Checked before the vision calls so a missing account costs no API spend.
     owner_id = core.owner_user_id()
     if owner_id is None:
         print("No account exists yet. Create your account in the app first, then re-run intake.")
         return
 
+    # Identify BEFORE confirming: the confirmation has to show the names vision
+    # read so a misread or a bad split can be caught before anything is written.
+    print(f"\nIdentifying {len(groups)} photo group(s)...")
+    identified = []
     for i, group in enumerate(groups, 1):
+        print(f"  Group {i} of {len(groups)} ({len(group)} photo(s))...")
+        identified.append(core.identify_bottle(group))
+
+    if not core.confirm_groups(groups, identified, yes=yes):
+        print("Aborted — nothing written.")
+        return
+
+    for i, (group, bottles) in enumerate(zip(groups, identified), 1):
         keys = ", ".join(p["key"] for p in group)
-        print(f"\nBottle {i}: {keys}")
+        print(f"\nGroup {i}: {keys}")
         print("-" * 60)
 
-        result = core.identify_bottle([(p["bytes"], p["mime"]) for p in group])
-
-        if "error" in result:
-            print(f"  Failed: {result['error']}")
-            if "raw" in result:
-                print(f"  Raw response: {result['raw'][:200]}")
+        if len(bottles) == 1 and "error" in bottles[0]:
+            print(f"  Failed: {bottles[0]['error']}")
+            if "raw" in bottles[0]:
+                print(f"  Raw response: {bottles[0]['raw'][:200]}")
             _move_all(group, PHOTOS_FAILED)
             print(f"  Moved {len(group)} photo(s) to {PHOTOS_FAILED}")
             continue
 
-        core.print_result(result)
+        if len(bottles) > 1:
+            print(f"  Vision found {len(bottles)} distinct bottles here — "
+                  "writing each as its own row.")
 
-        bottle_id, status = core.add_bottle(result, owner_id)
-        if status == "duplicate":
-            print(f"  Already in collection (id: {bottle_id}) — skipped")
-        elif status == "no_name":
-            print("  Model returned no name — skipped (not written)")
-        else:
-            print(f"  Added to the database as: {bottle_id}")
+        for b in bottles:
+            if b.get("photo_keys"):
+                print(f"\n  From: {', '.join(b['photo_keys'])}")
+            core.print_result(b)
+
+            bottle_id, status = core.add_bottle(b, owner_id)
+            if status == "duplicate":
+                print(f"  Already in collection (id: {bottle_id}) — skipped")
+            elif status == "no_name":
+                print("  Model returned no name — skipped (not written)")
+            else:
+                print(f"  Added to the database as: {bottle_id}")
 
         _move_all(group, PHOTOS_PROCESSED)
         print(f"  Moved {len(group)} photo(s) to {PHOTOS_PROCESSED}")
