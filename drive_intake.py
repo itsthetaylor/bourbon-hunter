@@ -18,6 +18,7 @@ then uses the SAME shared logic as the local path (intake_core):
 import io
 import os
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -88,11 +89,49 @@ def setup_drive_folders(service):
 
 
 def list_intake_photos(service, intake_folder_id):
+    """Every image directly in the intake folder, across ALL result pages.
+
+    Drive returns at most pageSize files per call (default 100) and signals
+    more with nextPageToken. A 30-bottle shelf is 90-120 photos, so without
+    this loop everything past the first page was never listed, never
+    processed, never moved, and never mentioned.
+    """
     query = f"'{intake_folder_id}' in parents and trashed=false and (mimeType contains 'image/')"
-    results = service.files().list(
-        q=query, fields="files(id, name, mimeType, modifiedTime)"
-    ).execute()
-    return results.get("files", [])
+    files, token = [], None
+    while True:
+        resp = service.files().list(
+            q=query, pageSize=1000, pageToken=token,
+            fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
+        ).execute()
+        files.extend(resp.get("files", []))
+        token = resp.get("nextPageToken")
+        if not token:
+            break
+    return files
+
+
+def dedupe_files(files):
+    """Drop repeated listings of the SAME Drive file (same id), keeping the first.
+
+    Dedup is by id, not name. Two devices, or two import sessions, legitimately
+    produce the same IMG_xxxx.HEIC for different photos; the old name-based
+    dedup silently dropped the second one and never named it. Distinct files
+    that share a name get a short id suffix on their display name so the
+    confirm screen can tell them apart.
+
+    Returns (kept, dropped_names). Each kept entry gains a 'display' key.
+    """
+    seen, kept, dropped = set(), [], []
+    for f in files:
+        if f["id"] in seen:
+            dropped.append(f["name"])
+            continue
+        seen.add(f["id"])
+        kept.append(dict(f))
+    names = Counter(f["name"] for f in kept)
+    for f in kept:
+        f["display"] = f["name"] if names[f["name"]] == 1 else f"{f['name']}#{f['id'][:6]}"
+    return kept, dropped
 
 
 def download_file(service, file_id):
@@ -142,35 +181,28 @@ def main():
         print("Drop bottle photos in that folder from your phone and re-run.")
         return
 
+    # Dedup BEFORE downloading so a repeated listing costs no bandwidth.
+    files, dropped = dedupe_files(files)
+    if dropped:
+        print(f"  Skipped {len(dropped)} repeated listing(s) of the same Drive file: "
+              f"{', '.join(dropped)}")
+
     print(f"\nFound {len(files)} photo(s); downloading to read capture time...")
     photos = []
     for f in files:
         try:
             data = download_file(service, f["id"])
         except Exception as e:
-            print(f"  Failed to download {f['name']}: {e}")
+            print(f"  Failed to download {f['display']}: {e}")
             print("Stopping — nothing written. Re-run once Drive is reachable.")
             return
         photos.append({
-            "key": f["name"],
+            "key": f["display"],
             "bytes": data,
             "mime": f.get("mimeType") or core.mime_from_name(f["name"]),
             "fallback_time": _parse_drive_time(f.get("modifiedTime")),
             "file_id": f["id"],
         })
-
-    # Deduplicate by filename — Drive occasionally returns the same file twice
-    # (e.g. if a photo was synced multiple times), which wastes API quota and
-    # can inflate a group past the per-call image limit.
-    seen_keys = set()
-    deduped = []
-    for p in photos:
-        if p["key"] not in seen_keys:
-            seen_keys.add(p["key"])
-            deduped.append(p)
-    if len(deduped) < len(photos):
-        print(f"  Deduplicated {len(photos) - len(deduped)} duplicate filename(s); {len(deduped)} unique photo(s) remain.")
-    photos = deduped
 
     groups, problem = core.cluster_photos(photos)
     if problem:
