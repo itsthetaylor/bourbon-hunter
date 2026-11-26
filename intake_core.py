@@ -399,7 +399,7 @@ def cluster_photos(photos, window_seconds=CLUSTER_WINDOW_SECONDS,
     # a guess at a bottle boundary, so each chunk is tagged for the confirm
     # screen: the user should know a cut was forced, and how big the gap was.
     final = []
-    for g in groups:
+    for gi, g in enumerate(groups):
         if len(g) <= max_images:
             final.append(g)
             continue
@@ -408,7 +408,7 @@ def cluster_photos(photos, window_seconds=CLUSTER_WINDOW_SECONDS,
             gap = (None if k == 1 else
                    (part[0]["capture_time"] - parts[k - 2][-1]["capture_time"]).total_seconds())
             for p in part:
-                p["chunk_of"] = {"part": k, "of": len(parts),
+                p["chunk_of"] = {"part": k, "of": len(parts), "parent_id": gi,
                                  "parent_size": len(g), "gap_s": gap}
         final.extend(parts)
     return final, None
@@ -457,6 +457,10 @@ def bottle_label(b):
     warn = category_warning(b.get("category"))
     if warn:
         label += f"\n         ** {warn}"
+    merged = b.get("merged_from")
+    if merged:
+        label += (f"\n         ** MERGED across chunk boundary — {', '.join(merged)} came "
+                  f"from the next chunk; fields unioned")
     dup = b.get("duplicate_of")
     if dup:
         label += f"\n         ** DUPLICATE of {dup} — will be skipped, not written"
@@ -517,6 +521,114 @@ def format_groups(groups, identified=None):
     return "\n".join(lines)
 
 
+# Fields that identify a bottle for the cross-chunk merge. Compared one by one so
+# two partial reads of one hang tag (dump date on the front shot, bottle number
+# on the tag shot) are recognized as the same bottle and unioned, not rejected.
+_MERGE_DETAIL_FIELDS = ("batch", "bottle_code", "dump_date", "barrel_no",
+                        "rick_no", "warehouse", "bottle_no")
+
+
+def _same_or_one_blank(a, b):
+    a, b = _clean(a), _clean(b)
+    return (not a) or (not b) or a.lower() == b.lower()
+
+
+def _mergeable(a, b):
+    """Two entries from adjacent chunks that look like ONE bottle a forced cut
+    split: same name, proof and volume, and no detail field that is filled on
+    both sides with different values."""
+    if _is_error(a) or _is_error(b):
+        return False
+    na, nb = _clean(a.get("name")).lower(), _clean(b.get("name")).lower()
+    if not na or na != nb:
+        return False
+    if _clean(a.get("proof")) != _clean(b.get("proof")):
+        return False
+    if parse_volume_ml(a.get("volume")) != parse_volume_ml(b.get("volume")):
+        return False
+    return all(_same_or_one_blank(a.get(f), b.get(f)) for f in _MERGE_DETAIL_FIELDS)
+
+
+def _union_entries(a, b):
+    """a's fields, with blanks filled from b. Notes are joined when both differ."""
+    m = dict(a)
+    for k, v in b.items():
+        if k in ("photo_indices", "photo_keys", "merged_from", "duplicate_of"):
+            continue
+        if k == "notes":
+            na, nb = _clean(m.get(k)), _clean(v)
+            if nb and nb != na:
+                m[k] = f"{na} | {nb}" if na else nb
+        elif not _clean(m.get(k)) and _clean(v):
+            m[k] = v
+    return m
+
+
+def merge_across_chunks(groups, identified):
+    """Re-join a bottle whose photos a size-split cut put in two adjacent chunks.
+
+    Only adjacent chunks of the SAME size-split parent are considered: two
+    natural time groups (>90s apart) stay separate, because a pause between
+    two identical bottles is exactly how a user signals they are two bottles.
+
+    When an entry in chunk i and one in chunk i+1 are _mergeable, the second
+    entry's photos are MOVED into chunk i's group, the two entries are unioned
+    (non-blank wins, chunk i first), the second is removed, and chunk i+1's
+    remaining entries are re-indexed. A chunk left empty is dropped, and the
+    next chunk becomes adjacent, so a bottle spanning three chunks chains.
+
+    Mutates `groups` and `identified` in place. Returns the number of merges.
+    """
+    merges = 0
+    i = 0
+    while i < len(groups) - 1:
+        ga, gb = groups[i], groups[i + 1]
+        ca = ga[0].get("chunk_of") if ga else None
+        cb = gb[0].get("chunk_of") if gb else None
+        if not (ca and cb and ca.get("parent_id") == cb.get("parent_id")):
+            i += 1
+            continue
+        ea, eb = identified[i], identified[i + 1]
+        for a in [x for x in ea if not _is_error(x)]:
+            b = next((x for x in eb if _mergeable(a, x)), None)
+            if b is None:
+                continue
+            # Move b's photos to the end of group a.
+            moved_idx = sorted(b.get("photo_indices") or [])
+            moved = [gb[j] for j in moved_idx]
+            base = len(ga)
+            ga.extend(moved)
+            # Compact group b and re-index its other entries.
+            removed = set(moved_idx)
+            remap, new_gb = {}, []
+            for j, p in enumerate(gb):
+                if j in removed:
+                    continue
+                remap[j] = len(new_gb)
+                new_gb.append(p)
+            gb[:] = new_gb
+            eb.remove(b)
+            for other in eb:
+                if _is_error(other):
+                    continue
+                other["photo_indices"] = sorted(remap[j] for j in (other.get("photo_indices") or [])
+                                                if j in remap)
+                other["photo_keys"] = [gb[j]["key"] for j in other["photo_indices"]]
+            # Build the merged entry in a's slot.
+            m = _union_entries(a, b)
+            m["photo_indices"] = sorted((a.get("photo_indices") or []) + list(range(base, base + len(moved))))
+            m["photo_keys"] = [ga[j]["key"] for j in m["photo_indices"]]
+            m["merged_from"] = (a.get("merged_from") or []) + [p["key"] for p in moved]
+            ea[ea.index(a)] = m
+            merges += 1
+        if not gb:
+            del groups[i + 1]
+            del identified[i + 1]
+            continue          # the new neighbour may be same-parent too (chain)
+        i += 1
+    return merges
+
+
 def partition_group(group, bottles):
     """Split a group's photos by whether vision assigned them to a bottle.
 
@@ -555,8 +667,11 @@ def confirm_groups(groups, identified=None, yes=False):
         failed = sum(1 for e in identified
                      if len(e) == 1 and _is_error(e[0]))
         dups = sum(1 for b in writable if b.get("duplicate_of"))
+        merged = sum(1 for b in writable if b.get("merged_from"))
         summary = (f"{len(writable) - dups} new bottle(s) from {len(groups)} "
                    f"photo group(s)")
+        if merged:
+            summary += f"; {merged} MERGED across chunk cuts"
         if dups:
             summary += f"; {dups} duplicate(s) will be skipped"
         if splits:

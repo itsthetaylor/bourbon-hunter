@@ -224,6 +224,10 @@ def main():
         print(f"  Group {i} of {len(groups)} ({len(group)} photo(s))...")
         identified.append(core.identify_bottle(group))
 
+    # A bottle whose photos straddled a forced chunk cut came back as two
+    # entries; re-join them before anything else looks at the list.
+    core.merge_across_chunks(groups, identified)
+
     # Flag what add_bottle will skip, so the confirm screen shows it up front.
     core.annotate_duplicates(identified, owner_id)
 
