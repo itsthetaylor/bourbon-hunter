@@ -28,6 +28,7 @@ ATOMICITY:
 """
 
 import os
+import re
 from datetime import date
 
 import psycopg2
@@ -252,6 +253,14 @@ def _to_money(v):
     if v is None:
         return None
     s = str(v).strip()
+    if s == "":
+        return None
+    # The vision model reads price stickers, which literally show "$", and the
+    # web form takes free text. Strip currency decoration so "$69.99",
+    # "1,299.00" and "69.99 USD" all parse. Anything left that is still not a
+    # number raises, so bad data stays visible; the intake write loop routes
+    # that bottle to failed rather than crashing the run.
+    s = re.sub(r"(?i)usd|[$,\s]", "", s)
     if s == "":
         return None
     return float(s)
