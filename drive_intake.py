@@ -224,6 +224,9 @@ def main():
         print(f"  Group {i} of {len(groups)} ({len(group)} photo(s))...")
         identified.append(core.identify_bottle(group))
 
+    # Flag what add_bottle will skip, so the confirm screen shows it up front.
+    core.annotate_duplicates(identified, owner_id)
+
     if not core.confirm_groups(groups, identified, yes=yes):
         print("Aborted — nothing written.")
         return
@@ -246,23 +249,37 @@ def main():
             print(f"  Vision found {len(bottles)} distinct bottles here — "
                   "writing each as its own row.")
 
+        # Bottles whose photos count as done: written, or already in the DB.
+        # A bottle that fails to write, or has no name, is NOT in this list, so
+        # partition_group below sends its photos to failed. One bad bottle
+        # never aborts the group, let alone the run.
+        done = []
         for b in bottles:
             if b.get("photo_keys"):
                 print(f"\n  From: {', '.join(b['photo_keys'])}")
             core.print_result(b)
 
-            bottle_id, status = core.add_bottle(b, owner_id)
+            try:
+                bottle_id, status = core.add_bottle(b, owner_id)
+            except Exception as e:  # noqa: BLE001 — isolate this bottle, keep going
+                print(f"  FAILED to write this bottle: {type(e).__name__}: {e}")
+                print("  Its photos go to the failed folder; continuing with the rest.")
+                continue
+
             if status == "duplicate":
-                print(f"  Already in collection (id: {bottle_id}) — skipped")
+                print(f"  Already in collection (id: {bottle_id}) — skipped; "
+                      "photos filed as processed")
+                done.append(b)
             elif status == "no_name":
-                print("  Model returned no name — skipped (not written)")
+                print("  Model returned no name — not written; photos go to failed")
             else:
                 print(f"  Added to the database as: {bottle_id}")
+                done.append(b)
 
-        # Only photos vision actually attached to a bottle are "processed".
-        # Anything left over had nothing written for it, so it goes to failed
-        # where it stays visible instead of looking done.
-        assigned, unassigned = core.partition_group(group, bottles)
+        # Only photos attached to a bottle that is now in the DB are
+        # "processed". Everything else had nothing written for it, so it goes
+        # to failed where it stays visible instead of looking done.
+        assigned, unassigned = core.partition_group(group, done)
         if unassigned:
             names = ", ".join(p["key"] for p in unassigned)
             print(f"  {len(unassigned)} photo(s) NOT assigned to any bottle: {names}")

@@ -448,6 +448,40 @@ def get_all_active_for_pricing():
     return [_bottle_dict(r) for r in rows]
 
 
+def find_duplicate(user_id, name, proof=None, batch=None, bottle_code=None, volume_ml=None):
+    """bottle_id of an ACTIVE bottle owned by user_id whose identity fields all
+    match, or None.
+
+    Identity is (name, proof, batch, bottle_code, volume_ml), compared
+    case-insensitively with blank and NULL treated as equal. Intake uses this
+    so re-running the same photos after a crash does not write the same bottle
+    twice. Only active bottles count: a consumed or sold one followed by a new
+    purchase of the same thing is a new bottle. Note the deliberate consequence:
+    two physically identical bottles with no distinguishing code are also
+    reported as duplicates of each other -- the hang-tag bottle number is what
+    tells them apart.
+    """
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT bottle_id FROM bottles
+                   WHERE user_id=%s AND status='active'
+                     AND lower(trim(coalesce(name,'')))        = lower(trim(%s))
+                     AND lower(trim(coalesce(proof,'')))       = lower(trim(%s))
+                     AND lower(trim(coalesce(batch,'')))       = lower(trim(%s))
+                     AND lower(trim(coalesce(bottle_code,''))) = lower(trim(%s))
+                     AND volume_ml = %s
+                   ORDER BY seq LIMIT 1""",
+                (user_id, name or "", proof or "", batch or "", bottle_code or "",
+                 normalize_volume_ml(volume_ml)),
+            )
+            r = cur.fetchone()
+            return r["bottle_id"] if r else None
+    finally:
+        conn.close()
+
+
 def get_bottle_ids():
     """Set of ALL bottle_ids (global) — intake slug-collision check only. bottle_id
     is the global PK, so uniqueness must be checked across every user."""

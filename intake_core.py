@@ -414,7 +414,11 @@ def bottle_label(b):
     conf = _clean(b.get("confidence")).lower()
     if conf and conf != "high":
         bits.append(f"{conf} confidence")
-    return name + (f"  ({', '.join(bits)})" if bits else "")
+    label = name + (f"  ({', '.join(bits)})" if bits else "")
+    dup = b.get("duplicate_of")
+    if dup:
+        label += f"\n         ** DUPLICATE of {dup} — will be skipped, not written"
+    return label
 
 
 def format_groups(groups, identified=None):
@@ -508,7 +512,11 @@ def confirm_groups(groups, identified=None, yes=False):
                      if len([b for b in e if not _is_error(b)]) > 1)
         failed = sum(1 for e in identified
                      if len(e) == 1 and _is_error(e[0]))
-        summary = f"{len(writable)} bottle(s) from {len(groups)} photo group(s)"
+        dups = sum(1 for b in writable if b.get("duplicate_of"))
+        summary = (f"{len(writable) - dups} new bottle(s) from {len(groups)} "
+                   f"photo group(s)")
+        if dups:
+            summary += f"; {dups} duplicate(s) will be skipped"
         if splits:
             summary += f"; {splits} group(s) SPLIT by vision"
         if failed:
@@ -684,11 +692,17 @@ def identify_bottle(group):
         })
     content.append({"type": "text", "text": VISION_PROMPT})
 
-    message = _client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        messages=[{"role": "user", "content": content}],
-    )
+    # One group's failure (rate limit, network blip, server error) must not
+    # abort the whole run: 29 good groups should not be lost to the 30th. The
+    # group is reported as failed and its photos go to the failed folder.
+    try:
+        message = _client.messages.create(
+            model=MODEL,
+            max_tokens=MAX_TOKENS,
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception as e:  # noqa: BLE001 — any API/transport failure is a failed group
+        return [{"error": f"vision call failed: {type(e).__name__}: {e}"}]
 
     text = message.content[0].text.strip()
     if text.startswith("```"):
@@ -778,10 +792,56 @@ def owner_user_id():
     return db.get_admin_user_id()
 
 
+def _identity(bottle_data):
+    """The five fields that make two intake results 'the same bottle', normalized
+    exactly as add_bottle stores them, so the pre-write duplicate check and the
+    stored row agree."""
+    return {
+        "name":        (bottle_data.get("name") or "").strip(),
+        "proof":       _clean(bottle_data.get("proof")),
+        "batch":       _clean(bottle_data.get("batch")),
+        "bottle_code": _clean(bottle_data.get("bottle_code")),
+        "volume_ml":   parse_volume_ml(bottle_data.get("volume")),
+    }
+
+
+def annotate_duplicates(identified, user_id):
+    """Set duplicate_of on every identified bottle that add_bottle would skip.
+
+    Called after identification and before confirm_groups, so the confirm
+    screen shows what WILL happen. Two sources: a matching active bottle
+    already in the DB, or an identical bottle earlier in this same run (which
+    add_bottle will find in the DB by the time it reaches the later one).
+    Mutates the bottle dicts in place; returns the number flagged.
+    """
+    seen_this_run = {}
+    flagged = 0
+    for entry in identified:
+        for b in entry:
+            if _is_error(b) or not (b.get("name") or "").strip():
+                continue
+            ident = _identity(b)
+            key = tuple((ident[k] or "").lower() if k != "volume_ml" else
+                        db.normalize_volume_ml(ident[k]) for k in
+                        ("name", "proof", "batch", "bottle_code", "volume_ml"))
+            dup = db.find_duplicate(user_id, **ident)
+            if dup is None and key in seen_this_run:
+                dup = f"{seen_this_run[key]} (earlier in this run)"
+            if dup:
+                b["duplicate_of"] = dup
+                flagged += 1
+            else:
+                seen_this_run.setdefault(key, ident["name"])
+    return flagged
+
+
 def add_bottle(bottle_data, user_id):
     """Insert one identified bottle into the DB, owned by user_id (atomic).
 
-    Returns (bottle_id, status) where status is 'added' or 'no_name'.
+    Returns (bottle_id, status) where status is 'added', 'duplicate' (an
+    active bottle with the same name, proof, batch, bottle_code and volume_ml
+    already belongs to this user -- nothing written, its id is returned), or
+    'no_name'.
     Slug collisions are resolved by _resolve_slug against the DB's existing ids
     (bottle_id is a GLOBAL primary key, so collisions are checked across all users)
     — a discriminator (proof, batch, or UUID fragment) is appended only when the
@@ -791,11 +851,16 @@ def add_bottle(bottle_data, user_id):
     if not name:
         return None, "no_name"
 
+    ident = _identity(bottle_data)
+    dup = db.find_duplicate(user_id, **ident)
+    if dup:
+        return dup, "duplicate"
+
     existing_ids = db.get_bottle_ids()
 
-    proof = _clean(bottle_data.get("proof"))
-    batch = _clean(bottle_data.get("batch"))
-    volume_ml = parse_volume_ml(bottle_data.get("volume"))
+    proof = ident["proof"]
+    batch = ident["batch"]
+    volume_ml = ident["volume_ml"]
     bottle_id = _resolve_slug(slugify(name), proof, batch, existing_ids)
 
     db.insert_bottle(
