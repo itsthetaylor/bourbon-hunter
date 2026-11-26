@@ -18,3 +18,6 @@ A personal bourbon collection tracker and watchdog agent.
 
 ## Status
 In development — first agent build.
+## Tests
+
+`python -m pytest tests/` — runs the intake integration scripts (vision stubbed, real Postgres). Set `BOURBON_TEST_PG` to an admin URL on a Postgres you can create databases on, e.g. `postgresql://postgres:PASSWORD@127.0.0.1:5433/postgres`; each script gets its own throwaway database. Without it the DB-backed scripts are skipped.
