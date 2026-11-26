@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from PIL import Image, ExifTags
+from PIL import Image, ExifTags, ImageOps
 import pillow_heif
 from dotenv import load_dotenv
 
@@ -535,6 +535,12 @@ def normalize_image(image_bytes, mime_type):
     HEIC); the output is always JPEG.
     """
     img = Image.open(io.BytesIO(image_bytes))
+    # Bake the EXIF Orientation into the pixels BEFORE re-encoding. A phone held
+    # portrait stores landscape pixels plus Orientation=6; re-encoding drops the
+    # tag, so without this the bottle is sent lying on its side, and small
+    # label text (the proof decimal, dump codes) is what suffers. No-op when
+    # there is no orientation tag.
+    img = ImageOps.exif_transpose(img)
     if img.mode != "RGB":
         img = img.convert("RGB")
     # thumbnail() only ever shrinks, so an already-small photo keeps its size
