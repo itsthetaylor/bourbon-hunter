@@ -60,6 +60,12 @@ def main():
             "path": p,
         })
 
+    # A retried upload lands the same photo twice; drop copies before they
+    # distort clustering. They are moved to failed after the confirm.
+    photos, dup_uploads = core.dedupe_by_content(photos)
+    for d in dup_uploads:
+        print(f"  duplicate upload of {d['duplicate_of']}: {d['key']}")
+
     print(f"Found {len(photos)} photo(s); reading capture times...")
     groups, problem = core.cluster_photos(photos)
     if problem:
@@ -88,9 +94,15 @@ def main():
     # Flag what add_bottle will skip, so the confirm screen shows it up front.
     core.annotate_duplicates(identified, owner_id)
 
-    if not core.confirm_groups(groups, identified, yes=yes):
+    if not core.confirm_groups(groups, identified, yes=yes,
+                               preamble=core.duplicate_upload_lines(dup_uploads)):
         print("Aborted — nothing written.")
         return
+
+    if dup_uploads:
+        _move_all(dup_uploads, PHOTOS_FAILED)
+        for d in dup_uploads:
+            print(f"  duplicate upload of {d['duplicate_of']}: moved {d['key']} to {PHOTOS_FAILED}")
 
     for i, (group, bottles) in enumerate(zip(groups, identified), 1):
         keys = ", ".join(p["key"] for p in group)

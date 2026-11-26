@@ -20,6 +20,7 @@ import re
 import sys
 import json
 import base64
+import hashlib
 import uuid
 from datetime import datetime
 
@@ -320,6 +321,62 @@ def _split_oversize(group, max_size):
     cut = min((i for i, g in enumerate(gaps) if g == best), key=lambda i: abs(i - mid))
     return (_split_oversize(group[:cut + 1], max_size)
             + _split_oversize(group[cut + 1:], max_size))
+
+
+def _shot_signature(image_bytes):
+    """(DateTimeOriginal, sorted pixel dims) or None -- what a re-encoded copy of
+    one shot still shares with the original. DateTimeOriginal only, not the
+    fallback DateTime, and dims are sorted so a copy with orientation baked in
+    still matches."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        sub = img.getexif().get_ifd(ExifTags.IFD.Exif)
+        dto = _parse_exif_dt(sub.get(_TAG_DATETIME_ORIGINAL))
+        if dto is None:
+            return None
+        return (dto, tuple(sorted(img.size)))
+    except Exception:
+        return None
+
+
+def dedupe_by_content(photos):
+    """Drop re-uploads of the same photo, keeping the first.
+
+    An interrupted mobile upload that is retried lands in Drive twice under
+    two file ids, and would become two bottles. Two photos are the same shot
+    when their bytes hash equal (sha256), or when their EXIF DateTimeOriginal
+    matches to the second AND their pixel dimensions match (a re-encoded copy).
+    Photos without DateTimeOriginal are compared by hash only -- two unrelated
+    no-EXIF photos must never be called duplicates.
+
+    Returns (kept, dropped); each dropped dict gets duplicate_of = kept key.
+    Run this BEFORE clustering so copies do not distort the time groups.
+    """
+    kept, dropped, by_hash, by_shot = [], [], {}, {}
+    for p in photos:
+        h = hashlib.sha256(p["bytes"]).hexdigest()
+        sig = _shot_signature(p["bytes"])
+        prior = by_hash.get(h) or (by_shot.get(sig) if sig else None)
+        if prior is not None:
+            p["duplicate_of"] = prior["key"]
+            dropped.append(p)
+            continue
+        by_hash[h] = p
+        if sig:
+            by_shot.setdefault(sig, p)
+        kept.append(p)
+    return kept, dropped
+
+
+def duplicate_upload_lines(dropped):
+    """Confirm-screen preamble for dropped re-uploads (empty list if none)."""
+    if not dropped:
+        return []
+    lines = [f"  {len(dropped)} duplicate upload(s) dropped — same photo listed twice; "
+             f"the copy goes to the FAILED folder, nothing is read from it:"]
+    for d in dropped:
+        lines.append(f"      {d['key']}  is a duplicate upload of  {d['duplicate_of']}")
+    return lines
 
 
 def cluster_photos(photos, window_seconds=CLUSTER_WINDOW_SECONDS,
@@ -649,15 +706,18 @@ def partition_group(group, bottles):
     return assigned, unassigned
 
 
-def confirm_groups(groups, identified=None, yes=False):
+def confirm_groups(groups, identified=None, yes=False, preamble=None):
     """Show the grouping -- and what vision read -- then ask before any DB write.
 
     Called AFTER identification so a misread or a bad split can be caught before
     anything is written. Pass yes=True (or --yes on the CLI) to skip the prompt.
+    `preamble` is extra lines shown first (e.g. dropped duplicate uploads).
     """
     print("\nProposed grouping — photos clustered by time, then separated by what "
           "vision read from the labels.")
     print("[exif] vs [file] shows the time source.")
+    for line in (preamble or []):
+        print(line)
     print(format_groups(groups, identified))
 
     if identified is None:

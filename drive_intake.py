@@ -204,6 +204,12 @@ def main():
             "file_id": f["id"],
         })
 
+    # A retried mobile upload lands the same photo twice under two file ids;
+    # drop copies before they distort clustering. Moved to failed after confirm.
+    photos, dup_uploads = core.dedupe_by_content(photos)
+    for d in dup_uploads:
+        print(f"  duplicate upload of {d['duplicate_of']}: {d['key']}")
+
     groups, problem = core.cluster_photos(photos)
     if problem:
         print("\n  Cannot group photos:\n  " + problem)
@@ -231,9 +237,15 @@ def main():
     # Flag what add_bottle will skip, so the confirm screen shows it up front.
     core.annotate_duplicates(identified, owner_id)
 
-    if not core.confirm_groups(groups, identified, yes=yes):
+    if not core.confirm_groups(groups, identified, yes=yes,
+                               preamble=core.duplicate_upload_lines(dup_uploads)):
         print("Aborted — nothing written.")
         return
+
+    if dup_uploads:
+        for d in dup_uploads:
+            move_file(service, d["file_id"], folders["failed"])
+            print(f"  duplicate upload of {d['duplicate_of']}: moved {d['key']} to {FAILED_FOLDER_NAME}/")
 
     for i, (group, bottles) in enumerate(zip(groups, identified), 1):
         keys = ", ".join(p["key"] for p in group)
