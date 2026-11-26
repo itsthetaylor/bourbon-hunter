@@ -14,6 +14,7 @@ SECURITY CONTRACT (do not break):
 """
 
 import logging
+import hmac
 import os
 import traceback
 
@@ -168,6 +169,7 @@ def _render_collection(error=None, status_code=200, category=None):
             market=db.latest_market_values(current_user.id),
             url_labels=URL_LABELS,
             user_email=current_user.email,
+            is_admin=current_user.is_admin,
             error=error,
         )
     except Exception:
@@ -213,10 +215,16 @@ def signup():
     if current_user.is_authenticated:
         return redirect(url_for("collection"))
     error = None
+    prefilled_code = None
     if request.method == "POST":
         code = request.form.get("invite_code", "")
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
+        # Came from an invite link with a valid code: keep the code hidden on a
+        # re-render so a typo in the email doesn't suddenly ask for a code the
+        # invitee never saw.
+        if request.form.get("via_invite") and SIGNUP_CODE and hmac.compare_digest(code, SIGNUP_CODE):
+            prefilled_code = code
         if not SIGNUP_CODE or code != SIGNUP_CODE:
             error = "Invalid invite code."
         elif "@" not in email or "." not in email.split("@")[-1]:
@@ -229,10 +237,34 @@ def signup():
                 is_admin = (db.count_users() == 0)  # first account is the owner/admin
                 uid = db.create_user(email, pw_hash, is_admin=is_admin)
                 login_user(auth.User(uid, email, is_admin))
-                return redirect(url_for("collection"))
+                # The owner goes straight to the collection; an invitee has no
+                # bottles yet and lands on the holding page instead.
+                return redirect(url_for("collection" if is_admin else "welcome"))
             except ValueError as e:
                 error = str(e)
-    return render_template_string(SIGNUP_TEMPLATE, error=error), (400 if error else 200)
+    return (render_template_string(SIGNUP_TEMPLATE, error=error, prefilled_code=prefilled_code),
+            (400 if error else 200))
+
+
+@app.route("/invite/<code>")
+def invite(code):
+    """Invite link: the signup page with the access code pre-filled and hidden,
+    so an invitee enters only email and password. A wrong or stale code renders
+    the public landing (with a 404 status) — it reveals nothing about the code."""
+    if current_user.is_authenticated:
+        return redirect(url_for("collection"))
+    if not SIGNUP_CODE or not hmac.compare_digest(code, SIGNUP_CODE):
+        return render_template_string(LANDING_TEMPLATE, authenticated=False), 404
+    return render_template_string(SIGNUP_TEMPLATE, error=None, prefilled_code=code)
+
+
+@app.route("/welcome")
+@login_required
+def welcome():
+    """Holding page for invitees until intake opens. The admin never needs it."""
+    if current_user.is_admin:
+        return redirect(url_for("collection"))
+    return render_template_string(WELCOME_TEMPLATE, user_email=current_user.email)
 
 
 @app.route("/logout")
@@ -391,6 +423,8 @@ h1 {
 .empty { text-align: center; color: #a08770; font-style: italic; font-size: 15px;
   padding: 48px 20px; border: 1px dashed rgba(160,135,112,.35);
   border-radius: 14px; margin-top: 20px; }
+.welcome-head { font-family: Georgia, serif; font-style: normal; font-size: 22px;
+  font-weight: 700; color: #d4a574; margin-bottom: 10px; }
 .brand-header {
   display: flex; align-items: baseline; gap: 8px;
   font-family: Georgia, serif; font-size: 15px; font-weight: 700;
@@ -682,10 +716,15 @@ SIGNUP_TEMPLATE = """<!DOCTYPE html>
     <div class="card">
       {% if error %}<div class="banner">{{ error }}</div>{% endif %}
       <form method="post" action="{{ url_for('signup') }}">
+        {% if prefilled_code %}
+        <input type="hidden" name="invite_code" value="{{ prefilled_code }}">
+        <input type="hidden" name="via_invite" value="1">
+        {% else %}
         <label class="fld">Access code</label>
         <input type="text" name="invite_code" autocomplete="off" required autofocus>
+        {% endif %}
         <label class="fld">Email</label>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required{% if prefilled_code %} autofocus{% endif %}>
         <label class="fld">Password (min 8 characters)</label>
         <input type="password" name="password" autocomplete="new-password" required>
         <button type="submit" class="btn">Claim your place</button>
@@ -693,6 +732,34 @@ SIGNUP_TEMPLATE = """<!DOCTYPE html>
       <div class="alt">Already a member? <a href="{{ url_for('login') }}">Sign in</a></div>
     </div>
     <div class="footnote">Love My Bourbons &middot; By invitation only</div>
+  </div>
+</body>
+</html>"""
+
+WELCOME_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0705">
+<title>Welcome &middot; Love My Bourbons</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+<style>""" + PREMIUM_CSS + """
+.wordmark.headline { font-size: 46px; line-height: 1.1; }
+@media (max-width: 480px) { .wordmark.headline { font-size: 34px; } }
+.signed { display: block; margin-top: 34px; font-size: 13px; color: #9a8a72; letter-spacing: .3px; }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="overline">Love My Bourbons</div>
+    <h1 class="wordmark headline">Stay tuned, my Bourbon friend.</h1>
+    <div class="rule"></div>
+    <p class="lead">You're on the list. Bottle intake opens soon &mdash; you'll be the first to know.</p>
+    <span class="signed">Signed in as {{ user_email }}.</span>
+    <span class="secondary"><a href="{{ url_for('logout') }}">Log out</a></span>
   </div>
 </body>
 </html>"""
@@ -735,7 +802,13 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   {% if error %}<div class="banner">{{ error }}</div>{% endif %}
 
   {% if not cat_sections %}
-    {% if active_category %}
+    {% if total_count == 0 and not is_admin %}
+      {# An invitee with nothing yet never sees a blank grid. #}
+      <div class="empty">
+        <div class="welcome-head">Stay tuned, my Bourbon friend.</div>
+        You're on the list. Bottle intake opens soon &mdash; you'll be the first to know.
+      </div>
+    {% elif active_category %}
       <div class="empty">No active bottles in this category.<br>
         <a href="{{ url_for('collection') }}" style="color:#d4a574">Show all bottles</a></div>
     {% else %}
