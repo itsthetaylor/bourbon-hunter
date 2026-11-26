@@ -416,6 +416,19 @@ def _is_error(bottle):
     return isinstance(bottle, dict) and "error" in bottle
 
 
+def category_warning(raw):
+    """A loud note when the model's category is non-empty but not an allowed
+    value. normalize_category still stores the default, but a Macallan quietly
+    filed as 'bourbon' is a wrong row nobody notices; this makes it visible on
+    the confirm screen and in the write log. Returns None when there is
+    nothing to flag."""
+    s = _clean(raw)
+    if s and s.lower() not in db.CATEGORIES:
+        return (f"CATEGORY '{s}' is not one of {'/'.join(db.CATEGORIES)} — stored as "
+                f"'{db.DEFAULT_CATEGORY}'; correct it in the app's Edit pane")
+    return None
+
+
 def bottle_label(b):
     """One-line label for a bottle vision read, for the confirmation output."""
     name = _clean(b.get("name")) or "(no name read)"
@@ -439,6 +452,9 @@ def bottle_label(b):
     if conf and conf != "high":
         bits.append(f"{conf} confidence")
     label = name + (f"  ({', '.join(bits)})" if bits else "")
+    warn = category_warning(b.get("category"))
+    if warn:
+        label += f"\n         ** {warn}"
     dup = b.get("duplicate_of")
     if dup:
         label += f"\n         ** DUPLICATE of {dup} — will be skipped, not written"
@@ -749,6 +765,9 @@ def print_result(result):
     print(f"  Code:       {compose_bottle_code(result) or ''}")
     print(f"  MSRP:       {result.get('msrp')}")
     print(f"  Category:   {db.normalize_category(result.get('category'))}")
+    warn = category_warning(result.get("category"))
+    if warn:
+        print(f"  ** {warn}")
 
     vol = parse_volume_ml(result.get("volume"))
     if vol is None:
