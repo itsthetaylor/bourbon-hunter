@@ -92,11 +92,27 @@ Group the photos by what the LABELS say — name, proof, batch/dump, bottle code
 by how close together they were taken. Return ONE entry per distinct PHYSICAL bottle,
 listing which photos belong to it.
 
-A back label, neck label, bottle bottom, or hand-written tag shot STAYS WITH the
-bottle it belongs to; it is not a separate bottle. Several photos of one bottle are
-one entry. Use the readable details to decide: the same name AND the same proof AND
-the same batch/code means one bottle; a different proof, batch, or dump code means a
+A back label, neck label, bottle bottom, hang tag or hand-written tag shot STAYS
+WITH the bottle it belongs to; it is not a separate bottle. Several photos of one
+bottle are one entry. Use the readable details to decide: the same name AND the same
+proof AND the same batch/code AND the same volume means one bottle; a different
+proof, batch, dump code, bottle number, OR VOLUME (750ml vs 1L vs 1.75L) means a
 different bottle, even for the same product line.
+
+Two or more bottles visible together in ONE frame are ALWAYS separate entries, one
+per bottle, even if they look identical.
+
+Boxes, tubes, bags, tins and gift packaging are NOT bottles. Never create an entry
+for packaging. A photo that shows only packaging stays unassigned; when a bottle is
+in frame with its box, the entry is for the bottle.
+
+A tissue-wrapped, bagged or otherwise obscured label where the NAME cannot be read
+with confidence: leave those photos unassigned. Do not infer a bottle from its
+shape, colour, closure or packaging.
+
+Japanese and other export labels often print ABV instead of proof (e.g. "51.5% vol").
+If only ABV is shown, report proof as ABV x 2 to one decimal (51.5% -> "103.0") and
+write "proof derived from ABV" in notes.
 
 If you cannot tell which bottle a photo belongs to, leave it out of every entry
 rather than guessing — an unassigned photo is reported to the user, a wrongly
@@ -115,6 +131,9 @@ Where to look:
 - The BOTTLE BOTTOM and BACK: hand-written or stamped codes, store/dusty codes,
   fill or dump dates, lot/barrel numbers. These are often the ONLY way to tell two
   batches apart — read them carefully.
+- HANG TAGS and neck tags (Blanton's, Weller Single Barrel, store picks, BTAC):
+  dumped-on date, barrel number, rick number, warehouse letter, bottle number.
+  Report each in its own field below.
 
 ACCURACY RULE — this is critical:
 If a field is not clearly legible, or is not present, return it as an EMPTY string "".
@@ -136,7 +155,12 @@ number appears under two different bottles.
   "proof": "Proof to ONE DECIMAL PLACE exactly as printed (e.g. \\"127.4\\", not \\"127\\" and not \\"127 proof\\"). \\"\\" if not clearly legible.",
   "batch": "Batch number/code if printed or hand-written (e.g. \\"Batch 25A\\", \\"C920\\", \\"B11\\"). \\"\\" if none.",
   "year": "Release year or vintage if shown, otherwise \\"\\"",
-  "bottle_code": "Hand-written or stamped code, ESPECIALLY from the bottle bottom or back label — store/dusty code, fill/dump date, lot or barrel number, any stamped annotation. \\"\\" if none legible.",
+  "bottle_code": "Hand-written or stamped store/dusty code or lot code from the bottle bottom or back label, NOT the hang-tag fields below. \\"\\" if none legible.",
+  "dump_date": "Dumped-on / bottled-on date from a hang tag or back label, exactly as printed (e.g. \\"12-13-25\\"). \\"\\" if absent.",
+  "barrel_no": "Barrel number from a hang tag or label (e.g. \\"218\\"). \\"\\" if absent.",
+  "rick_no": "Rick number from a hang tag (e.g. \\"9\\"). \\"\\" if absent.",
+  "warehouse": "Warehouse letter or number from a hang tag (e.g. \\"H\\"). \\"\\" if absent.",
+  "bottle_no": "Bottle number from a hang tag or limited-release label (e.g. \\"014\\", or \\"123 of 500\\" as \\"123/500\\"). \\"\\" if absent.",
   "msrp": "MSRP in USD as a number only, or \\"\\" if not shown",
   "category": "EXACTLY one of \\"bourbon\\", \\"spirit\\", or \\"wine\\". Use \\"bourbon\\" for bourbon, rye and other American whiskey; \\"spirit\\" for any other distilled spirit (scotch, Irish, Japanese whisky, tequila, mezcal, rum, gin, vodka, cognac, liqueur); \\"wine\\" for still or sparkling wine, champagne, port, madeira and sherry. If you genuinely cannot tell, use \\"bourbon\\".",
   "volume": "Bottle volume EXACTLY as printed on the label, keeping its unit (e.g. \\"750ml\\", \\"1L\\", \\"1.75L\\", \\"375ml\\"). \\"\\" if not legible -- do NOT assume 750ml.",
@@ -402,7 +426,7 @@ def bottle_label(b):
     batch = _clean(b.get("batch"))
     if batch:
         bits.append(f"Batch {batch}")
-    code = _clean(b.get("bottle_code"))
+    code = compose_bottle_code(b)
     if code:
         bits.append(code)
     vol = parse_volume_ml(b.get("volume"))
@@ -722,7 +746,7 @@ def print_result(result):
     print(f"  Proof:      {result.get('proof')}")
     print(f"  Batch:      {result.get('batch')}")
     print(f"  Year:       {result.get('year')}")
-    print(f"  Code:       {result.get('bottle_code')}")
+    print(f"  Code:       {compose_bottle_code(result) or ''}")
     print(f"  MSRP:       {result.get('msrp')}")
     print(f"  Category:   {db.normalize_category(result.get('category'))}")
 
@@ -792,6 +816,26 @@ def owner_user_id():
     return db.get_admin_user_id()
 
 
+# Hang-tag fields fold into bottle_code as "dumped X | barrel Y | rick Z | wh W |
+# bottle N" until they have their own columns. Order is fixed so two reads of the
+# same tag compose identically (the duplicate check compares this string).
+_TAG_FIELDS = (("dump_date", "dumped"), ("barrel_no", "barrel"), ("rick_no", "rick"),
+               ("warehouse", "wh"), ("bottle_no", "bottle"))
+
+
+def compose_bottle_code(bottle_data):
+    """Free-form bottle_code first, then any hang-tag fields, joined by ' | '."""
+    parts = []
+    code = _clean(bottle_data.get("bottle_code"))
+    if code:
+        parts.append(code)
+    for key, label in _TAG_FIELDS:
+        v = _clean(bottle_data.get(key))
+        if v:
+            parts.append(f"{label} {v}")
+    return " | ".join(parts)
+
+
 def _identity(bottle_data):
     """The five fields that make two intake results 'the same bottle', normalized
     exactly as add_bottle stores them, so the pre-write duplicate check and the
@@ -800,7 +844,7 @@ def _identity(bottle_data):
         "name":        (bottle_data.get("name") or "").strip(),
         "proof":       _clean(bottle_data.get("proof")),
         "batch":       _clean(bottle_data.get("batch")),
-        "bottle_code": _clean(bottle_data.get("bottle_code")),
+        "bottle_code": compose_bottle_code(bottle_data),
         "volume_ml":   parse_volume_ml(bottle_data.get("volume")),
     }
 
@@ -870,7 +914,7 @@ def add_bottle(bottle_data, user_id):
         name=name,
         proof=proof,
         batch=batch,
-        bottle_code=_clean(bottle_data.get("bottle_code")),
+        bottle_code=ident["bottle_code"],
         msrp=_clean(bottle_data.get("msrp")),
         status="active",
         category=_clean(bottle_data.get("category")),
