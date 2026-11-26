@@ -54,8 +54,9 @@ MAX_TOKENS = 2000             # must fit ONE JSON entry per bottle for a whole
                               # response is invalid JSON and fails the whole
                               # group, and unused headroom costs nothing.
 CLUSTER_WINDOW_SECONDS = 90   # photos within this gap = same bottle
-MAX_IMAGES_PER_CALL = 20      # hard cap per vision call; a bigger group HARD-STOPS
-                              # rather than being truncated (see identify_bottle)
+MAX_IMAGES_PER_CALL = 20      # cap per vision call. cluster_photos sub-chunks any
+                              # time group over this at its largest internal gaps,
+                              # so identify_bottle's own check is only a safety net.
 MAX_IMAGE_EDGE_PX = 1568      # Claude downsizes beyond this itself, so sending more
                               # pixels costs request size with no accuracy gain
 JPEG_QUALITY = 85             # re-encode quality for every image we send
@@ -271,8 +272,30 @@ def read_capture_time(image_bytes):
     return _parse_exif_dt(exif.get(_TAG_DATETIME))
 
 
-def cluster_photos(photos, window_seconds=CLUSTER_WINDOW_SECONDS):
-    """Group photos into bottles by capture time.
+def _split_oversize(group, max_size):
+    """Recursively split a time group larger than max_size at its largest
+    internal capture-time gap.
+
+    The largest gap is the most likely bottle boundary inside a run of photos
+    that time-clustering could not separate. EXIF time has 1-second resolution,
+    so ties are common; a tie is broken toward the middle of the group so a
+    run of evenly spaced photos halves instead of peeling off one photo at a
+    time. Returns a list of chunks, each <= max_size, in time order.
+    """
+    if len(group) <= max_size:
+        return [group]
+    gaps = [(group[i + 1]["capture_time"] - group[i]["capture_time"]).total_seconds()
+            for i in range(len(group) - 1)]
+    best = max(gaps)
+    mid = (len(group) - 1) / 2.0
+    cut = min((i for i, g in enumerate(gaps) if g == best), key=lambda i: abs(i - mid))
+    return (_split_oversize(group[:cut + 1], max_size)
+            + _split_oversize(group[cut + 1:], max_size))
+
+
+def cluster_photos(photos, window_seconds=CLUSTER_WINDOW_SECONDS,
+                   max_images=MAX_IMAGES_PER_CALL):
+    """Group photos into candidate bottle groups by capture time.
 
     `photos` is a list of dicts, each with at least:
         key            display name (filename / Drive name)
@@ -280,12 +303,20 @@ def cluster_photos(photos, window_seconds=CLUSTER_WINDOW_SECONDS):
         fallback_time  datetime or None (file mtime / Drive modifiedTime)
 
     Returns (groups, problem):
-      * groups  — list of lists of photo dicts, in time order, on success
+      * groups  — list of lists of photo dicts, in time order, on success.
+                  Any time group larger than max_images is sub-chunked at its
+                  largest internal gaps (see _split_oversize), so every group
+                  fits one vision call. Shooting a whole shelf without 90s
+                  pauses produces one huge time group; this is what keeps that
+                  from hard-stopping the run.
       * problem — None on success, else a human-readable HARD-STOP message
 
     Each photo dict is annotated in place with:
         capture_time   datetime used for clustering
         time_source    'exif' | 'file'
+        chunk_of       only on photos from a sub-chunked group:
+                       {part, of, parent_size, gap_s} — gap_s is the seconds
+                       between this chunk and the previous one (None for part 1)
 
     HARD STOPS (no partial writes):
       * any photo with neither EXIF nor a usable fallback time
@@ -334,7 +365,24 @@ def cluster_photos(photos, window_seconds=CLUSTER_WINDOW_SECONDS):
             groups.append([cur])
         else:
             groups[-1].append(cur)
-    return groups, None
+
+    # Sub-chunk anything a single vision call can't take. The chunk boundary is
+    # a guess at a bottle boundary, so each chunk is tagged for the confirm
+    # screen: the user should know a cut was forced, and how big the gap was.
+    final = []
+    for g in groups:
+        if len(g) <= max_images:
+            final.append(g)
+            continue
+        parts = _split_oversize(g, max_images)
+        for k, part in enumerate(parts, 1):
+            gap = (None if k == 1 else
+                   (part[0]["capture_time"] - parts[k - 2][-1]["capture_time"]).total_seconds())
+            for p in part:
+                p["chunk_of"] = {"part": k, "of": len(parts),
+                                 "parent_size": len(g), "gap_s": gap}
+        final.extend(parts)
+    return final, None
 
 
 def _is_error(bottle):
@@ -378,6 +426,12 @@ def format_groups(groups, identified=None):
         items = ", ".join(f"{p['key']} [{p['time_source']}]" for p in g)
         t0 = g[0]["capture_time"].isoformat(timespec="seconds")
         lines.append(f"  Group {i}: [{items}]  (starts {t0})")
+        ck = g[0].get("chunk_of")
+        if ck:
+            gap = f", cut at a {ck['gap_s']:.0f}s gap" if ck["gap_s"] is not None else ""
+            lines.append(f"      (size-split: part {ck['part']}/{ck['of']} of a "
+                         f"{ck['parent_size']}-photo time cluster{gap} — a bottle may "
+                         f"straddle this cut; check its photos are all here)")
 
         if identified is None:
             continue
@@ -564,16 +618,16 @@ def identify_bottle(group):
     plus photo_indices / photo_keys naming the photos it was read from. On
     failure, returns a single-item list whose only entry has an 'error' key.
     """
-    # HARD STOP, never truncate: dropping photos silently loses whole bottles,
-    # and the group would then be filed as processed with nothing written for
-    # the photos that were cut.
+    # Safety net only: cluster_photos sub-chunks oversize groups, so a group
+    # this big means a caller bypassed it. Still never truncate — dropping
+    # photos silently loses whole bottles.
     if len(group) > MAX_IMAGES_PER_CALL:
         names = ", ".join(p.get("key", "?") for p in group)
         return [{"error": (
             f"{len(group)} photos in this group, over the {MAX_IMAGES_PER_CALL}-photo "
             f"limit for a single vision call. Nothing was sent or identified for it — "
-            f"no photos were dropped. Split these into smaller batches "
-            f"(re-shoot further apart, or move some aside) and re-run: {names}")}]
+            f"no photos were dropped. Run the group through cluster_photos, which "
+            f"splits oversize groups: {names}")}]
 
     sent = group
 
